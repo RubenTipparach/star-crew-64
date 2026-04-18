@@ -28,16 +28,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build ROM in libdragon container
-        # The libdragon image ships the MIPS toolchain, libdragon headers/libs,
-        # and tiny3d (at /opt/libdragon/tiny3d) already built. We override the
-        # T3D_INST path so our Makefile uses the image's copy instead of
-        # expecting tiny3d/ inside the repo.
+        # The libdragon image ships the MIPS toolchain and libdragon itself,
+        # but not tiny3d — we clone+install it inside the container, then
+        # build the game. The Makefile's default T3D_INST is
+        # `$(pwd)/tiny3d`, which lines up with where we clone tiny3d here.
         uses: addnab/docker-run-action@v3
         with:
           image: ghcr.io/dragonminded/libdragon:latest
-          options: -v ${{ github.workspace }}:/workspace -w /workspace -e T3D_INST=/opt/libdragon/tiny3d
+          options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -e
+            if [ ! -d tiny3d ]; then
+              git clone --depth 1 https://github.com/HailToDodongo/tiny3d.git
+            fi
+            # Only build the core library (produces tiny3d/build/libt3d.a);
+            # tiny3d's build.sh also rebuilds every example + tool, which we
+            # don't need. t3d.mk links libt3d.a directly from the source tree.
+            make -C tiny3d -j"$(nproc)"
             make -j"$(nproc)"
             ls -la star-crew-64.z64
 
