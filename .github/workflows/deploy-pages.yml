@@ -42,8 +42,17 @@ jobs:
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -e
+            # Pin libdragon to the commit right before `display_init`
+            # switched from plain memset() to sys_hw_memset() for
+            # framebuffer clears (libdragon 79f3dcc, 2026-03-15).
+            # sys_hw_memset requires MI repeat mode, which the rubens-ares
+            # WASM emulator doesn't implement (ares/.../mi/io.cpp:60 marks
+            # initializeMode=1 as `unimplemented`), so any libdragon newer
+            # than this asserts at boot on our emulator.
+            LIBDRAGON_SHA=25165e1d209118096edd4eb9a54b6ee5e4c22342
             if [ ! -f /n64_toolchain/include/n64.mk ]; then
-              git clone --depth 1 --branch preview https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              git clone https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              git -C /tmp/libdragon checkout "$LIBDRAGON_SHA"
               make -C /tmp/libdragon -j"$(nproc)"
               make -C /tmp/libdragon install
               make -C /tmp/libdragon tools -j"$(nproc)"
