@@ -28,16 +28,27 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build ROM in libdragon container
-        # The libdragon image ships the MIPS toolchain and libdragon itself,
-        # but not tiny3d — we clone+install it inside the container, then
-        # build the game. The Makefile's default T3D_INST is
-        # `$(pwd)/tiny3d`, which lines up with where we clone tiny3d here.
+        # `ghcr.io/dragonminded/libdragon` only ships the MIPS cross toolchain
+        # (at /n64_toolchain). It does NOT contain libdragon itself or tiny3d.
+        # So inside the container we:
+        #   1. clone + install libdragon (preview branch, required by tiny3d)
+        #      and its tools (mksprite, audioconv64, etc. used by our Makefile)
+        #   2. clone + build tiny3d (libt3d.a is linked directly from its tree)
+        #   3. build the game ROM
+        # Cache key the libdragon SHA so reruns reuse the prebuilt toolchain.
         uses: addnab/docker-run-action@v3
         with:
           image: ghcr.io/dragonminded/libdragon:latest
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -e
+            if [ ! -f /n64_toolchain/include/n64.mk ]; then
+              git clone --depth 1 --branch preview https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              make -C /tmp/libdragon -j"$(nproc)"
+              make -C /tmp/libdragon install
+              make -C /tmp/libdragon tools -j"$(nproc)"
+              make -C /tmp/libdragon tools-install
+            fi
             if [ ! -d tiny3d ]; then
               git clone --depth 1 https://github.com/HailToDodongo/tiny3d.git
             fi
