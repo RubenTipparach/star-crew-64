@@ -120,16 +120,24 @@ jobs:
           test -f emulator/build/web-ui/out/ares.wasm
           test -f emulator/build/web-ui/out/ares.data
 
+      - name: Stage emulator artifact (flat)
+        # Stage into a single flat dir so the artifact layout is predictable;
+        # upload-artifact@v4 strips the least-common-ancestor from multi-path
+        # uploads, which makes downstream paths fragile.
+        run: |
+          mkdir -p emu-dist
+          cp emulator/web/index.html            emu-dist/index.html
+          cp emulator/web/coi-serviceworker.js  emu-dist/coi-serviceworker.js
+          cp emulator/build/web-ui/out/ares     emu-dist/ares.js
+          cp emulator/build/web-ui/out/ares.wasm emu-dist/ares.wasm
+          cp emulator/build/web-ui/out/ares.data emu-dist/ares.data
+          ls -la emu-dist/
+
       - name: Upload emulator artifact
         uses: actions/upload-artifact@v4
         with:
           name: ares-wasm
-          path: |
-            emulator/web/index.html
-            emulator/web/coi-serviceworker.js
-            emulator/build/web-ui/out/ares
-            emulator/build/web-ui/out/ares.wasm
-            emulator/build/web-ui/out/ares.data
+          path: emu-dist
           if-no-files-found: error
           retention-days: 7
 
@@ -156,12 +164,12 @@ jobs:
         run: |
           set -e
           mkdir -p _site
-          cp artifacts/emu/emulator/web/index.html              _site/index.html
-          cp artifacts/emu/emulator/web/coi-serviceworker.js    _site/coi-serviceworker.js
-          cp artifacts/emu/emulator/build/web-ui/out/ares       _site/ares.js
-          cp artifacts/emu/emulator/build/web-ui/out/ares.wasm  _site/ares.wasm
-          cp artifacts/emu/emulator/build/web-ui/out/ares.data  _site/ares.data
-          cp artifacts/rom/star-crew-64.z64                     _site/rom.z64
+          cp artifacts/emu/index.html              _site/index.html
+          cp artifacts/emu/coi-serviceworker.js    _site/coi-serviceworker.js
+          cp artifacts/emu/ares.js                 _site/ares.js
+          cp artifacts/emu/ares.wasm               _site/ares.wasm
+          cp artifacts/emu/ares.data               _site/ares.data
+          cp artifacts/rom/star-crew-64.z64        _site/rom.z64
           ls -la _site/
 
       - name: Setup Pages
