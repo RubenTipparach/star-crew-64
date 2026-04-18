@@ -1,0 +1,193 @@
+name: Build Game + Emulator and Deploy to GitHub Pages
+
+# Runs on every push to any branch (as requested) and on manual dispatch.
+# The build job always runs; the deploy job publishes to GitHub Pages.
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-game:
+    name: Build N64 ROM (libdragon + tiny3d)
+    runs-on: ubuntu-latest
+    outputs:
+      rom-artifact: star-crew-64-rom
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build ROM in libdragon container
+        # `ghcr.io/dragonminded/libdragon` only ships the MIPS cross toolchain
+        # (at /n64_toolchain). It does NOT contain libdragon itself or tiny3d.
+        # So inside the container we:
+        #   1. clone + install libdragon (preview branch, required by tiny3d)
+        #      and its tools (mksprite, audioconv64, etc. used by our Makefile)
+        #   2. clone + build tiny3d (libt3d.a is linked directly from its tree)
+        #   3. build the game ROM
+        # Cache key the libdragon SHA so reruns reuse the prebuilt toolchain.
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ghcr.io/dragonminded/libdragon:latest
+          options: -v ${{ github.workspace }}:/workspace -w /workspace
+          run: |
+            set -e
+            if [ ! -f /n64_toolchain/include/n64.mk ]; then
+              git clone --depth 1 --branch preview https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              make -C /tmp/libdragon -j"$(nproc)"
+              make -C /tmp/libdragon install
+              make -C /tmp/libdragon tools -j"$(nproc)"
+              make -C /tmp/libdragon tools-install
+            fi
+            if [ ! -d tiny3d ]; then
+              git clone --depth 1 https://github.com/HailToDodongo/tiny3d.git
+            fi
+            # Only build the core library (produces tiny3d/build/libt3d.a);
+            # tiny3d's build.sh also rebuilds every example + tool, which we
+            # don't need. t3d.mk links libt3d.a directly from the source tree.
+            make -C tiny3d -j"$(nproc)"
+            make -j"$(nproc)"
+            ls -la star-crew-64.z64
+
+      - name: Upload ROM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-crew-64-rom
+          path: star-crew-64.z64
+          if-no-files-found: error
+          retention-days: 7
+
+  build-emulator:
+    name: Build ares WASM (from emulator submodule)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: Verify emscripten
+        run: emcc --version
+
+      - name: Prepare emulator build tree
+        # Mirrors emulator/.github/workflows/deploy-pages.yml from rubens-ares:
+        # stage a build/ dir by copying ares/ + applying wasm-patches/ on top.
+        working-directory: emulator
+        run: |
+          set -e
+          mkdir -p build
+          cp -r ares/ares build/
+          cp -r ares/nall build/
+          cp -r ares/libco build/
+          cp -r ares/ruby build/
+          cp -r ares/hiro build/
+          cp -r ares/mia build/
+          cp -r ares/thirdparty build/
+          [ -d ares/scripts ] && cp -r ares/scripts build/ || true
+          mkdir -p build/web-ui
+          cp -a wasm-patches/. build/
+          cp "ares/ares/System/Nintendo 64/pif.ntsc.rom" build/web-ui/
+          cp "ares/ares/System/Nintendo 64/pif.pal.rom"  build/web-ui/
+          find build -name '*.cpp' -exec touch {} +
+          find build -name '*.hpp' -exec touch {} +
+          touch build/LICENSE
+
+      - name: Build WASM
+        working-directory: emulator/build/web-ui
+        run: emmake make -j"$(nproc)" wasm32=true platform=linux
+
+      - name: Verify build artifacts
+        run: |
+          ls -la emulator/build/web-ui/out/
+          test -f emulator/build/web-ui/out/ares
+          test -f emulator/build/web-ui/out/ares.wasm
+          test -f emulator/build/web-ui/out/ares.data
+
+      - name: Stage emulator artifact (flat)
+        # Stage into a single flat dir so the artifact layout is predictable;
+        # upload-artifact@v4 strips the least-common-ancestor from multi-path
+        # uploads, which makes downstream paths fragile.
+        run: |
+          mkdir -p emu-dist
+          cp emulator/web/index.html            emu-dist/index.html
+          cp emulator/web/coi-serviceworker.js  emu-dist/coi-serviceworker.js
+          cp emulator/build/web-ui/out/ares     emu-dist/ares.js
+          cp emulator/build/web-ui/out/ares.wasm emu-dist/ares.wasm
+          cp emulator/build/web-ui/out/ares.data emu-dist/ares.data
+          ls -la emu-dist/
+
+      - name: Upload emulator artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ares-wasm
+          path: emu-dist
+          if-no-files-found: error
+          retention-days: 7
+
+  package-site:
+    name: Stage GitHub Pages site
+    runs-on: ubuntu-latest
+    needs: [build-game, build-emulator]
+    steps:
+      - name: Download ROM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: star-crew-64-rom
+          path: artifacts/rom
+
+      - name: Download emulator artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ares-wasm
+          path: artifacts/emu
+
+      - name: Stage _site/
+        # The emulator's web/index.html auto-loads /rom.z64 on boot, so we
+        # copy the built game ROM alongside the emulator under that name.
+        run: |
+          set -e
+          mkdir -p _site
+          cp artifacts/emu/index.html              _site/index.html
+          cp artifacts/emu/coi-serviceworker.js    _site/coi-serviceworker.js
+          cp artifacts/emu/ares.js                 _site/ares.js
+          cp artifacts/emu/ares.wasm               _site/ares.wasm
+          cp artifacts/emu/ares.data               _site/ares.data
+          cp artifacts/rom/star-crew-64.z64        _site/rom.z64
+          ls -la _site/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: package-site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
