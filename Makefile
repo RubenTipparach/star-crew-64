@@ -15,6 +15,20 @@ include $(T3D_INST)/t3d.mk
 # Compiler flags
 N64_CFLAGS += -std=gnu2x -Os -I$(SRC_DIR)
 
+# Python interpreter — MSYS2 only ships `python`, macOS/Linux usually ship
+# `python3`. Used for both level compilation (below) and the STARTING_MAP
+# lookup just after this.
+PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
+
+# Pick up the starting-map name from levels/levels.json so the game always
+# boots whichever map the config file points at. Falls back to "starting" if
+# the JSON lookup fails (missing file, bad shape) so the build still goes.
+STARTING_MAP := $(shell $(PYTHON) -c "import json; print(json.load(open('levels/levels.json'))['starting_map'])" 2>/dev/null)
+ifeq ($(STARTING_MAP),)
+STARTING_MAP := starting
+endif
+N64_CFLAGS += -DSTARTING_LEVEL=\"$(STARTING_MAP)\"
+
 # Project name
 PROJECT_NAME = star-crew-64
 
@@ -31,8 +45,6 @@ assets_wav = $(wildcard $(ASSETS_DIR)/*.wav)
 assets_audio = $(addprefix filesystem/,$(notdir $(assets_wav:%.wav=%.wav64)))
 
 # Level compilation (JSON -> .lvl) — levels/levels.json is config, not a map.
-# MSYS2 only ships `python`, macOS/Linux usually ship `python3` — pick whichever exists.
-PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
 LEVEL_CONFIG  = levels/levels.json
 LEVEL_SOURCES = $(filter-out $(LEVEL_CONFIG), $(wildcard levels/*.json))
 LEVEL_BINS    = $(LEVEL_SOURCES:levels/%.json=filesystem/%.lvl)
