@@ -1,0 +1,8 @@
+@echo off
+REM Template for build-run.local.bat - copy this file to build-run.local.bat
+REM and edit the paths for your machine. build-run.local.bat is gitignored.
+REM
+REM Anything set here is picked up by build-run.bat on each invocation.
+
+REM Full path to your ares.exe, if it's not on PATH or in a default install dir.
+REM set "ARES_EXE=C:\path\to\ares.exe"

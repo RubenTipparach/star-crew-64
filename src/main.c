@@ -14,6 +14,17 @@
 // Character movement speed in world units per frame (at ~60fps).
 #define MOVE_SPEED 0.6f
 
+// Which level to boot into. The Makefile injects this as -DSTARTING_LEVEL=...
+// from the `starting_map` field of levels/levels.json; the fallback is only
+// hit if that shell step ever fails (e.g. malformed JSON).
+#ifndef STARTING_LEVEL
+#define STARTING_LEVEL "starting"
+#endif
+#define STARTING_LEVEL_PATH "rom:/" STARTING_LEVEL ".lvl"
+
+// How quickly the hero rotates toward the stick direction (0..1 per frame).
+#define TURN_SMOOTHING 0.2f
+
 // Four point lights: two amber ones hovering over the airlock rows, one white
 // over the hallway centre, and one that follows the character (updated each
 // frame). Tuned so the interior reads as lit without swamping the key light.
@@ -39,8 +50,14 @@ int main(void)
     rdpq_text_register_font(1, font);
 
     Camera camera = camera_create();
-    Level *level = level_create();
+    Level *level = level_load(STARTING_LEVEL_PATH);
     Character *hero = character_create();
+
+    // Spawn the hero on the "spawn" entity if one was placed in the editor;
+    // otherwise leave him at the world origin (which is the grid's center).
+    if (level->has_spawn) {
+        character_set_position(hero, level->spawn_wx, 0.0f, level->spawn_wz);
+    }
 
     // Static lights. LIGHT_HERO is overwritten each frame with the hero's
     // current position.
@@ -51,10 +68,10 @@ int main(void)
         [LIGHT_HERO]      = { .position = {{   0, 18,   0}}, .color = {255, 225, 160, 255}, .size = 40.0f },
     };
 
-    // Center camera on the level.
-    float lx, lz;
-    level_get_center(level, &lx, &lz);
-    camera_set_target(&camera, lx, 5.0f, lz);
+    // Camera follows the hero each frame (see loop body). Seed it here so the
+    // very first frame isn't pointed at (0,0,0) while the hero is off at his
+    // spawn cell.
+    camera_set_target(&camera, hero->position.v[0], 5.0f, hero->position.v[2]);
 
     int frameIdx = 0;
 
@@ -71,7 +88,7 @@ int main(void)
         // stick-up moves the hero into the scene (camera-forward) and
         // stick-right moves along camera-right.
         float sx = inputs.stick_x / STICK_DIVISOR;
-        float sy = -inputs.stick_y / STICK_DIVISOR;   // stick up should go into the scene
+        float sy = inputs.stick_y / STICK_DIVISOR;   // stick up (+y) should go into the scene
         const float k = 0.7071f;
         float dx = (sx - sy) * k * MOVE_SPEED;   // sx·right.x + sy·forward.x
         float dz = -(sx + sy) * k * MOVE_SPEED;  // sx·right.z + sy·forward.z
@@ -79,10 +96,11 @@ int main(void)
         hero->position.v[2] += dz;
         float speed = sqrtf(dx * dx + dz * dz);
         if (speed > 0.01f) {
-            hero->rot_y = atan2f(dx, dz);
+            character_face_direction(hero, atan2f(dx, -dz), TURN_SMOOTHING);
         }
 
-        // character_animate(hero, speed);  // walk cycle disabled — swing needs tuning
+        character_animate(hero, speed);
+        camera_set_target(&camera, hero->position.v[0], 5.0f, hero->position.v[2]);
         camera_update(&camera);
         character_update_matrix(hero, frameIdx);
 

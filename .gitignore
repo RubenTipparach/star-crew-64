@@ -9,6 +9,9 @@ filesystem/
 *.pak
 *.map
 
+# Machine-local overrides for build-run.bat (e.g. ARES_EXE)
+build-run.local.bat
+
 # External toolchains (download with install.bat)
 n64-toolchain/
 
@@ -36,3 +39,4 @@ Thumbs.db
 *.n64
 *.eeprom
 *.ram
+.history/

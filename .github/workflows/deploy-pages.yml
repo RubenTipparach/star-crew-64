@@ -42,8 +42,17 @@ jobs:
           options: -v ${{ github.workspace }}:/workspace -w /workspace
           run: |
             set -e
+            # Pin libdragon to the commit right before `display_init`
+            # switched from plain memset() to sys_hw_memset() for
+            # framebuffer clears (libdragon 79f3dcc, 2026-03-15).
+            # sys_hw_memset requires MI repeat mode, which the rubens-ares
+            # WASM emulator doesn't implement (ares/.../mi/io.cpp:60 marks
+            # initializeMode=1 as `unimplemented`), so any libdragon newer
+            # than this asserts at boot on our emulator.
+            LIBDRAGON_SHA=25165e1d209118096edd4eb9a54b6ee5e4c22342
             if [ ! -f /n64_toolchain/include/n64.mk ]; then
-              git clone --depth 1 --branch preview https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              git clone https://github.com/DragonMinded/libdragon.git /tmp/libdragon
+              git -C /tmp/libdragon checkout "$LIBDRAGON_SHA"
               make -C /tmp/libdragon -j"$(nproc)"
               make -C /tmp/libdragon install
               make -C /tmp/libdragon tools -j"$(nproc)"
@@ -146,6 +155,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-game, build-emulator]
     steps:
+      - name: Checkout repo (for web-overlay/)
+        uses: actions/checkout@v4
+
       - name: Download ROM artifact
         uses: actions/download-artifact@v4
         with:
@@ -161,6 +173,8 @@ jobs:
       - name: Stage _site/
         # The emulator's web/index.html auto-loads /rom.z64 on boot, so we
         # copy the built game ROM alongside the emulator under that name.
+        # Then inject our mobile-debug.js so users on phones (no devtools)
+        # can see the autoload log + JS errors directly on the page.
         run: |
           set -e
           mkdir -p _site
@@ -170,6 +184,9 @@ jobs:
           cp artifacts/emu/ares.wasm               _site/ares.wasm
           cp artifacts/emu/ares.data               _site/ares.data
           cp artifacts/rom/star-crew-64.z64        _site/rom.z64
+          cp web-overlay/mobile-debug.js           _site/mobile-debug.js
+          # Inject the debug overlay script just before </body>.
+          sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/index.html
           ls -la _site/
 
       - name: Setup Pages
