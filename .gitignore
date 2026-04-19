@@ -15,6 +15,7 @@ n64-toolchain/
 # External libraries (non-submodule local clones)
 libdragon/
 tiny3d/
+.libdragon-src/
 
 # Staged site for GitHub Pages
 _site/
