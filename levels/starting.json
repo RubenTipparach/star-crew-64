@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "grid": { "w": 30, "h": 20 },
+  "rooms": [
+    { "id": 1, "x": 2,  "y": 8,  "w": 6, "h": 4, "name": "Bridge" },
+    { "id": 2, "x": 10, "y": 4,  "w": 5, "h": 4, "name": "Quarters" },
+    { "id": 3, "x": 10, "y": 12, "w": 5, "h": 4, "name": "Mess" },
+    { "id": 4, "x": 17, "y": 7,  "w": 7, "h": 6, "name": "Engines" },
+    { "id": 5, "x": 25, "y": 9,  "w": 4, "h": 3, "name": "Airlock" }
+  ],
+  "hallways": [
+    "8,10", "9,10",
+    "10,10", "11,10", "12,10", "13,10", "14,10",
+    "15,10", "16,10",
+    "12,8", "12,9",
+    "12,11",
+    "24,10"
+  ],
+  "entities": [
+    { "id": 100, "x": 4,  "y": 10, "group": "spawn" },
+    { "id": 101, "x": 12, "y": 5,  "group": "crate" },
+    { "id": 102, "x": 12, "y": 14, "group": "crate" },
+    { "id": 103, "x": 20, "y": 10, "group": "enemy" },
+    { "id": 104, "x": 26, "y": 10, "group": "airlock" }
+  ],
+  "groups": {
+    "spawn":   "#72e37b",
+    "crate":   "#ffd369",
+    "enemy":   "#ff6b6b",
+    "airlock": "#5ae7ff"
+  }
+}

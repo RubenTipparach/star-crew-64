@@ -49,8 +49,8 @@ if not exist "%MSYS_BASH%" (
 )
 
 echo.
-echo [2/5] Installing MSYS2 packages (make, git, gcc, libpng)...
-%MSYS_BASH% -lc "pacman -S --noconfirm --needed make git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-libpng"
+echo [2/5] Installing MSYS2 packages (make, git, gcc, libpng, python)...
+%MSYS_BASH% -lc "pacman -S --noconfirm --needed make git python mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-libpng"
 if errorlevel 1 (
     echo ERROR: pacman failed
     exit /b 1

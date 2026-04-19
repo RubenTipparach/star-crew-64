@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "starting_map": "starting",
+  "maps": {
+    "starting": {
+      "source": "starting.json",
+      "description": "Default spawn ship: bridge, quarters, mess, engines, airlock."
+    }
+  }
+}

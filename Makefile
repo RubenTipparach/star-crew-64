@@ -30,8 +30,15 @@ assets_sprites = $(addprefix filesystem/,$(notdir $(assets_png:%.png=%.sprite)))
 assets_wav = $(wildcard $(ASSETS_DIR)/*.wav)
 assets_audio = $(addprefix filesystem/,$(notdir $(assets_wav:%.wav=%.wav64)))
 
+# Level compilation (JSON -> .lvl) — levels/levels.json is config, not a map.
+# MSYS2 only ships `python`, macOS/Linux usually ship `python3` — pick whichever exists.
+PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
+LEVEL_CONFIG  = levels/levels.json
+LEVEL_SOURCES = $(filter-out $(LEVEL_CONFIG), $(wildcard levels/*.json))
+LEVEL_BINS    = $(LEVEL_SOURCES:levels/%.json=filesystem/%.lvl)
+
 # All converted assets
-assets_conv = $(assets_sprites) $(assets_audio)
+assets_conv = $(assets_sprites) $(assets_audio) $(LEVEL_BINS)
 
 # Main target
 all: $(PROJECT_NAME).z64
@@ -53,6 +60,11 @@ filesystem/%.wav64: $(ASSETS_DIR)/%.wav
 	@mkdir -p $(dir $@)
 	@echo "    [AUDIO] $@"
 	$(N64_AUDIOCONV) --wav-compress 1 -o filesystem "$<"
+
+# Compile level editor JSON -> .lvl binary
+filesystem/%.lvl: levels/%.json tools/compile-levels.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/compile-levels.py "$<" "$@"
 
 # DFS filesystem depends on converted assets
 $(BUILD_DIR)/$(PROJECT_NAME).dfs: $(assets_conv)

@@ -9,7 +9,7 @@
 #define CHARACTER_VERTS_PER_PART 8
 #define CHARACTER_TRIS_PER_PART 12
 
-static const char *CHARACTER_PART_NAMES[CHARACTER_NUM_PARTS] = { "head", "nose", "torso", "arm_l", "arm_r", "leg_l", "leg_r" };
+__attribute__((unused)) static const char *CHARACTER_PART_NAMES[CHARACTER_NUM_PARTS] = { "head", "nose", "torso", "arm_l", "arm_r", "leg_l", "leg_r" };
 
 static const int16_t CHARACTER_PART_POS[CHARACTER_NUM_PARTS][CHARACTER_VERTS_PER_PART][3] = {
     // head

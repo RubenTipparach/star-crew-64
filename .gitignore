@@ -38,3 +38,4 @@ Thumbs.db
 *.n64
 *.eeprom
 *.ram
+.history/

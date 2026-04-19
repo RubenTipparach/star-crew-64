@@ -74,7 +74,7 @@ int main(void)
         // stick-up moves the hero into the scene (camera-forward) and
         // stick-right moves along camera-right.
         float sx = inputs.stick_x / STICK_DIVISOR;
-        float sy = -inputs.stick_y / STICK_DIVISOR;   // stick up should go into the scene
+        float sy = inputs.stick_y / STICK_DIVISOR;   // stick up (+y) should go into the scene
         const float k = 0.7071f;
         float dx = (sx - sy) * k * MOVE_SPEED;   // sx·right.x + sy·forward.x
         float dz = -(sx + sy) * k * MOVE_SPEED;  // sx·right.z + sy·forward.z
@@ -82,10 +82,10 @@ int main(void)
         hero->position.v[2] += dz;
         float speed = sqrtf(dx * dx + dz * dz);
         if (speed > 0.01f) {
-            character_face_direction(hero, atan2f(dx, dz), TURN_SMOOTHING);
+            character_face_direction(hero, atan2f(dx, -dz), TURN_SMOOTHING);
         }
 
-        // character_animate(hero, speed);  // walk cycle disabled — swing needs tuning
+        character_animate(hero, speed);
         camera_update(&camera);
         character_update_matrix(hero, frameIdx);
 

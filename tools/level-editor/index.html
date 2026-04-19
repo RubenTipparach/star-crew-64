@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>star-crew-64 · level editor</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+         background: #1a1b22; color: #ddd; display: flex; height: 100vh; overflow: hidden; }
+
+  #sidebar { width: 260px; padding: 12px; background: #22232c; border-right: 1px solid #333;
+             overflow-y: auto; flex-shrink: 0; }
+  #sidebar h2 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+                margin: 18px 0 8px; color: #8af; }
+  #sidebar h2:first-child { margin-top: 0; }
+
+  .tool-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+              margin: 3px 0; background: #2d2f38; color: #ddd; border: 1px solid #3a3d48;
+              cursor: pointer; border-radius: 4px; font-size: 13px; text-align: left; }
+  .tool-btn:hover { background: #363844; }
+  .tool-btn.active { background: #2c5a4a; border-color: #4e9d7c; color: #cfe; }
+  .tool-btn kbd { margin-left: auto; font-size: 10px; background: #1a1b22;
+                  padding: 2px 5px; border-radius: 3px; color: #888; }
+
+  .action-btn { display: block; width: 100%; padding: 8px; margin: 4px 0;
+                background: #33364a; color: #ddd; border: 1px solid #444a60;
+                cursor: pointer; border-radius: 4px; font-size: 12px; }
+  .action-btn:hover { background: #3b3f55; }
+  .action-btn.danger { background: #4a2929; border-color: #703a3a; }
+  .action-btn.danger:hover { background: #5a3232; }
+
+  input[type=text] { width: 100%; padding: 6px 8px; background: #1a1b22; color: #ddd;
+                     border: 1px solid #3a3d48; border-radius: 3px; font-size: 12px;
+                     font-family: inherit; }
+
+  .group-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .group-chip { display: inline-block; padding: 3px 9px; border-radius: 10px;
+                color: #111; font-size: 11px; cursor: pointer; font-weight: 600;
+                user-select: none; border: 2px solid transparent; }
+  .group-chip.current { border-color: #fff; }
+
+  #info { font-size: 11px; color: #777; line-height: 1.6; margin-top: 14px;
+          padding-top: 10px; border-top: 1px solid #333; }
+
+  #selection-panel { background: #1a1b22; padding: 10px; border-radius: 4px;
+                     font-size: 12px; min-height: 40px; }
+  #selection-panel b { color: #8af; }
+  #selection-panel input { margin-top: 4px; }
+
+  #canvas-wrap { flex: 1; overflow: auto; background: #0d0e14;
+                 display: flex; align-items: flex-start; }
+  canvas { display: block; cursor: crosshair; }
+
+  #status { position: fixed; bottom: 0; left: 260px; right: 0;
+            padding: 4px 12px; background: rgba(26,27,34,0.95);
+            font-size: 11px; color: #888; border-top: 1px solid #333; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h2>Tools</h2>
+  <button class="tool-btn active" data-tool="room">Room <span style="color:#888">(drag)</span><kbd>R</kbd></button>
+  <button class="tool-btn" data-tool="hallway">Hallway <span style="color:#888">(paint)</span><kbd>H</kbd></button>
+  <button class="tool-btn" data-tool="entity">Entity <span style="color:#888">(click)</span><kbd>E</kbd></button>
+  <button class="tool-btn" data-tool="erase">Erase<kbd>X</kbd></button>
+  <button class="tool-btn" data-tool="select">Select<kbd>V</kbd></button>
+
+  <h2>Entity group</h2>
+  <input id="group-input" type="text" value="crew" placeholder="group name">
+  <div id="group-chips" class="group-chips"></div>
+
+  <h2>Layout</h2>
+  <button class="action-btn" id="btn-generate">Generate spaceship</button>
+  <button class="action-btn danger" id="btn-clear">Clear all</button>
+
+  <h2>I/O</h2>
+  <button class="action-btn" id="btn-export">Export JSON</button>
+  <button class="action-btn" id="btn-import">Import JSON</button>
+  <input type="file" id="import-file" accept=".json" hidden>
+
+  <h2>Selected</h2>
+  <div id="selection-panel">—</div>
+
+  <div id="info">
+    Erase on room cell deletes the whole room (and its entities).<br>
+    Del/Backspace deletes the current selection.<br>
+    Hallways can't be painted over rooms.
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="status">ready</div>
+
+<script>
+(() => {
+  // ---- Config ----------------------------------------------------------------
+  const GRID_W = 60;
+  const GRID_H = 40;
+  const CELL   = 20;
+
+  const PALETTE = ['#5ae7ff','#ff6b6b','#ffd369','#72e37b','#c792ea',
+                   '#ff9cee','#7be4c6','#ffb36b','#b7e34d','#8a9dff'];
+
+  // ---- State -----------------------------------------------------------------
+  const state = {
+    rooms: [],               // {id, x, y, w, h, name}
+    hallways: new Set(),     // "x,y"
+    entities: [],            // {id, x, y, group}
+    groups: {},              // name -> color
+    tool: 'room',
+    currentGroup: 'crew',
+    selected: null,          // {kind: 'room'|'entity', ref}
+    drag: null,              // {x, y} start cell for rect-drag tools
+    dragCur: null,
+    mouseDown: false,
+    nextId: 1,
+  };
+  assignGroupColor('crew');
+
+  // ---- Canvas ----------------------------------------------------------------
+  const canvas = document.getElementById('canvas');
+  canvas.width  = GRID_W * CELL;
+  canvas.height = GRID_H * CELL;
+  const ctx = canvas.getContext('2d');
+
+  // ---- Utilities -------------------------------------------------------------
+  function key(x, y) { return x + ',' + y; }
+
+  function cellAtEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: Math.floor((e.clientX - r.left) / CELL),
+      y: Math.floor((e.clientY - r.top)  / CELL),
+    };
+  }
+
+  function inBounds(x, y) {
+    return x >= 0 && x < GRID_W && y >= 0 && y < GRID_H;
+  }
+
+  function roomAt(x, y) {
+    for (const r of state.rooms) {
+      if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r;
+    }
+    return null;
+  }
+
+  function entityAt(x, y) {
+    return state.entities.find(e => e.x === x && e.y === y);
+  }
+
+  function roomsOverlap(x, y, w, h, pad = 0) {
+    for (const r of state.rooms) {
+      if (x + w + pad > r.x && r.x + r.w + pad > x &&
+          y + h + pad > r.y && r.y + r.h + pad > y) return true;
+    }
+    return false;
+  }
+
+  function assignGroupColor(name) {
+    if (state.groups[name]) return state.groups[name];
+    const used = new Set(Object.values(state.groups));
+    const pick = PALETTE.find(c => !used.has(c)) ||
+                 PALETTE[Object.keys(state.groups).length % PALETTE.length];
+    state.groups[name] = pick;
+    return pick;
+  }
+
+  // ---- Rendering -------------------------------------------------------------
+  function render() {
+    ctx.fillStyle = '#0d0e14';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // grid
+    ctx.strokeStyle = '#181a22';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= GRID_W; x++) {
+      ctx.moveTo(x * CELL + 0.5, 0);
+      ctx.lineTo(x * CELL + 0.5, GRID_H * CELL);
+    }
+    for (let y = 0; y <= GRID_H; y++) {
+      ctx.moveTo(0, y * CELL + 0.5);
+      ctx.lineTo(GRID_W * CELL, y * CELL + 0.5);
+    }
+    ctx.stroke();
+
+    // hallways (under rooms so room borders overdraw)
+    ctx.fillStyle = '#2c3346';
+    for (const k of state.hallways) {
+      const [x, y] = k.split(',').map(Number);
+      ctx.fillRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4);
+    }
+
+    // rooms
+    for (const r of state.rooms) {
+      ctx.fillStyle = '#353a48';
+      ctx.fillRect(r.x * CELL + 1, r.y * CELL + 1, r.w * CELL - 2, r.h * CELL - 2);
+      ctx.strokeStyle = '#5a6278';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x * CELL + 1.5, r.y * CELL + 1.5, r.w * CELL - 3, r.h * CELL - 3);
+
+      // label
+      ctx.fillStyle = '#8a93a8';
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.textBaseline = 'top';
+      ctx.fillText(r.name, r.x * CELL + 4, r.y * CELL + 4);
+    }
+
+    // entities
+    for (const e of state.entities) {
+      const color = state.groups[e.group] || assignGroupColor(e.group);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc((e.x + 0.5) * CELL, (e.y + 0.5) * CELL, CELL * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // drag preview
+    if (state.tool === 'room' && state.drag && state.dragCur) {
+      const x1 = Math.min(state.drag.x, state.dragCur.x);
+      const y1 = Math.min(state.drag.y, state.dragCur.y);
+      const x2 = Math.max(state.drag.x, state.dragCur.x);
+      const y2 = Math.max(state.drag.y, state.dragCur.y);
+      const w = x2 - x1 + 1, h = y2 - y1 + 1;
+      const ok = w >= 2 && h >= 2 && !roomsOverlap(x1, y1, w, h);
+      ctx.strokeStyle = ok ? '#72e37b' : '#ff6b6b';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(x1 * CELL + 1, y1 * CELL + 1, w * CELL - 2, h * CELL - 2);
+      ctx.setLineDash([]);
+    }
+
+    // selection highlight
+    if (state.selected) {
+      ctx.strokeStyle = '#ffd369';
+      ctx.lineWidth = 3;
+      if (state.selected.kind === 'room') {
+        const r = state.selected.ref;
+        ctx.strokeRect(r.x * CELL, r.y * CELL, r.w * CELL, r.h * CELL);
+      } else if (state.selected.kind === 'entity') {
+        const e = state.selected.ref;
+        ctx.beginPath();
+        ctx.arc((e.x + 0.5) * CELL, (e.y + 0.5) * CELL, CELL * 0.44, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // ---- Operations ------------------------------------------------------------
+  function placeRoom(x1, y1, x2, y2) {
+    const x = Math.min(x1, x2), y = Math.min(y1, y2);
+    const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
+    if (w < 2 || h < 2) { setStatus('room too small (min 2×2)'); return; }
+    if (roomsOverlap(x, y, w, h)) { setStatus('room overlaps another room'); return; }
+    // clear hallway cells inside the new room
+    for (let i = 0; i < w; i++) {
+      for (let j = 0; j < h; j++) state.hallways.delete(key(x + i, y + j));
+    }
+    const n = state.rooms.length + 1;
+    state.rooms.push({ id: state.nextId++, x, y, w, h, name: `Room ${n}` });
+    setStatus(`placed Room ${n} (${w}×${h})`);
+  }
+
+  function paintHallway(x, y) {
+    if (!inBounds(x, y) || roomAt(x, y)) return;
+    state.hallways.add(key(x, y));
+  }
+
+  function placeEntity(x, y) {
+    if (!inBounds(x, y)) return;
+    if (entityAt(x, y)) return;
+    const g = state.currentGroup || 'default';
+    assignGroupColor(g);
+    state.entities.push({ id: state.nextId++, x, y, group: g });
+  }
+
+  function eraseAt(x, y) {
+    const ent = entityAt(x, y);
+    if (ent) {
+      state.entities = state.entities.filter(e => e !== ent);
+      setStatus(`erased entity #${ent.id}`);
+      return;
+    }
+    if (state.hallways.has(key(x, y))) {
+      state.hallways.delete(key(x, y));
+      return;
+    }
+    const room = roomAt(x, y);
+    if (room) {
+      deleteRoom(room);
+      setStatus(`deleted ${room.name}`);
+    }
+  }
+
+  function deleteRoom(room) {
+    state.rooms = state.rooms.filter(r => r !== room);
+    state.entities = state.entities.filter(e =>
+      !(e.x >= room.x && e.x < room.x + room.w &&
+        e.y >= room.y && e.y < room.y + room.h));
+    if (state.selected && state.selected.ref === room) state.selected = null;
+  }
+
+  function clearAll() {
+    state.rooms = [];
+    state.hallways.clear();
+    state.entities = [];
+    state.selected = null;
+    state.nextId = 1;
+  }
+
+  // ---- Generator -------------------------------------------------------------
+  function generateSpaceship() {
+    if (state.rooms.length > 0 && !confirm('Replace current layout?')) return;
+    clearAll();
+
+    // Central spine runs left-right; rooms branch off it.
+    const spineY = Math.floor(GRID_H / 2);
+    const target = 6 + Math.floor(Math.random() * 4); // 6-9 rooms
+    let attempts = 0;
+
+    while (state.rooms.length < target && attempts < 400) {
+      attempts++;
+      const w = 4 + Math.floor(Math.random() * 5);  // 4-8
+      const h = 4 + Math.floor(Math.random() * 4);  // 4-7
+      const x = 2 + Math.floor(Math.random() * (GRID_W - w - 4));
+      // bias above/below spine so it feels like a ship
+      const above = Math.random() < 0.5;
+      const gap = 2 + Math.floor(Math.random() * 3);
+      const y = above ? spineY - gap - h : spineY + gap;
+      if (y < 1 || y + h >= GRID_H - 1) continue;
+      if (roomsOverlap(x, y, w, h, 1)) continue;
+      const n = state.rooms.length + 1;
+      state.rooms.push({ id: state.nextId++, x, y, w, h, name: `Room ${n}` });
+    }
+
+    // Connect rooms via MST over centres, L-shaped hallways.
+    const centres = state.rooms.map(r => ({
+      r, cx: r.x + Math.floor(r.w / 2), cy: r.y + Math.floor(r.h / 2)
+    }));
+    const edges = [];
+    for (let i = 0; i < centres.length; i++) {
+      for (let j = i + 1; j < centres.length; j++) {
+        const dx = centres[i].cx - centres[j].cx;
+        const dy = centres[i].cy - centres[j].cy;
+        edges.push({ i, j, d: dx * dx + dy * dy });
+      }
+    }
+    edges.sort((a, b) => a.d - b.d);
+    const parent = centres.map((_, i) => i);
+    const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    for (const e of edges) {
+      const a = find(e.i), b = find(e.j);
+      if (a !== b) { parent[a] = b; connectCells(centres[e.i], centres[e.j]); }
+    }
+
+    setStatus(`generated ${state.rooms.length} rooms`);
+  }
+
+  function connectCells(a, b) {
+    let x = a.cx, y = a.cy;
+    const firstH = Math.random() < 0.5;
+    const stepX = () => { while (x !== b.cx) { if (!roomAt(x, y)) state.hallways.add(key(x, y)); x += x < b.cx ? 1 : -1; } };
+    const stepY = () => { while (y !== b.cy) { if (!roomAt(x, y)) state.hallways.add(key(x, y)); y += y < b.cy ? 1 : -1; } };
+    if (firstH) { stepX(); stepY(); } else { stepY(); stepX(); }
+  }
+
+  // ---- UI glue ---------------------------------------------------------------
+  function setTool(t) {
+    state.tool = t;
+    state.drag = null;
+    state.dragCur = null;
+    for (const btn of document.querySelectorAll('.tool-btn')) {
+      btn.classList.toggle('active', btn.dataset.tool === t);
+    }
+    canvas.style.cursor = (t === 'select') ? 'default' : 'crosshair';
+  }
+
+  function setCurrentGroup(g) {
+    state.currentGroup = g;
+    document.getElementById('group-input').value = g;
+    assignGroupColor(g);
+    updateGroupChips();
+  }
+  window.__editorSetCurrentGroup = setCurrentGroup;
+
+  function updateGroupChips() {
+    const chips = document.getElementById('group-chips');
+    chips.innerHTML = Object.entries(state.groups).map(([g, c]) =>
+      `<span class="group-chip${g === state.currentGroup ? ' current' : ''}"
+             style="background:${c}"
+             onclick="__editorSetCurrentGroup(${JSON.stringify(g)})">${escapeHtml(g)}</span>`
+    ).join('');
+  }
+
+  function updateSelection() {
+    const el = document.getElementById('selection-panel');
+    if (!state.selected) { el.textContent = '—'; return; }
+    if (state.selected.kind === 'room') {
+      const r = state.selected.ref;
+      el.innerHTML = `<b>${escapeHtml(r.name)}</b><br>
+        <span style="color:#888">${r.w}×${r.h} @ (${r.x},${r.y})</span><br>
+        <input type="text" value="${escapeAttr(r.name)}"
+               onchange="__editorRenameRoom(${r.id}, this.value)">`;
+    } else {
+      const e = state.selected.ref;
+      el.innerHTML = `<b>Entity #${e.id}</b><br>
+        <span style="color:#888">@ (${e.x},${e.y})</span><br>
+        group: <input type="text" value="${escapeAttr(e.group)}"
+                       onchange="__editorSetEntityGroup(${e.id}, this.value)">`;
+    }
+  }
+  window.__editorRenameRoom = (id, name) => {
+    const r = state.rooms.find(x => x.id === id);
+    if (r) { r.name = name || r.name; render(); }
+  };
+  window.__editorSetEntityGroup = (id, g) => {
+    const e = state.entities.find(x => x.id === id);
+    if (e) { e.group = g || 'default'; assignGroupColor(e.group); render(); updateGroupChips(); }
+  };
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+  // ---- Mouse -----------------------------------------------------------------
+  canvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    state.mouseDown = true;
+    const c = cellAtEvent(e);
+    if (!inBounds(c.x, c.y)) return;
+
+    switch (state.tool) {
+      case 'room':
+        state.drag = c; state.dragCur = c;
+        break;
+      case 'hallway':
+        paintHallway(c.x, c.y);
+        break;
+      case 'entity':
+        placeEntity(c.x, c.y);
+        break;
+      case 'erase':
+        eraseAt(c.x, c.y);
+        break;
+      case 'select': {
+        const ent  = entityAt(c.x, c.y);
+        const room = roomAt(c.x, c.y);
+        if (ent)       state.selected = { kind: 'entity', ref: ent };
+        else if (room) state.selected = { kind: 'room',   ref: room };
+        else           state.selected = null;
+        updateSelection();
+        break;
+      }
+    }
+    render();
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    const c = cellAtEvent(e);
+    if (state.tool === 'room' && state.drag) {
+      state.dragCur = c;
+      render();
+    } else if (state.mouseDown && inBounds(c.x, c.y)) {
+      if (state.tool === 'hallway') { paintHallway(c.x, c.y); render(); }
+      else if (state.tool === 'erase') { eraseAt(c.x, c.y); render(); }
+    }
+  });
+
+  canvas.addEventListener('mouseup', () => {
+    state.mouseDown = false;
+    if (state.tool === 'room' && state.drag && state.dragCur) {
+      placeRoom(state.drag.x, state.drag.y, state.dragCur.x, state.dragCur.y);
+    }
+    state.drag = null; state.dragCur = null;
+    render();
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    state.mouseDown = false;
+    state.drag = null; state.dragCur = null;
+    render();
+  });
+
+  // ---- Keyboard --------------------------------------------------------------
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    const k = e.key.toLowerCase();
+    if (k === 'r') setTool('room');
+    else if (k === 'h') setTool('hallway');
+    else if (k === 'e') setTool('entity');
+    else if (k === 'x') setTool('erase');
+    else if (k === 'v') setTool('select');
+    else if (k === 'delete' || k === 'backspace') {
+      if (!state.selected) return;
+      if (state.selected.kind === 'room')   deleteRoom(state.selected.ref);
+      else if (state.selected.kind === 'entity')
+        state.entities = state.entities.filter(x => x !== state.selected.ref);
+      state.selected = null;
+      updateSelection(); render();
+      e.preventDefault();
+    }
+  });
+
+  // ---- Tool buttons ----------------------------------------------------------
+  for (const btn of document.querySelectorAll('.tool-btn')) {
+    btn.addEventListener('click', () => setTool(btn.dataset.tool));
+  }
+
+  // ---- Group input -----------------------------------------------------------
+  const groupInput = document.getElementById('group-input');
+  groupInput.addEventListener('input', () => {
+    state.currentGroup = groupInput.value.trim() || 'default';
+    assignGroupColor(state.currentGroup);
+    updateGroupChips();
+  });
+
+  // ---- Generate / clear ------------------------------------------------------
+  document.getElementById('btn-generate').addEventListener('click', () => {
+    generateSpaceship();
+    updateSelection(); render();
+  });
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    if (!confirm('Clear the entire level?')) return;
+    clearAll();
+    updateSelection(); render();
+    setStatus('cleared');
+  });
+
+  // ---- Export / import -------------------------------------------------------
+  document.getElementById('btn-export').addEventListener('click', () => {
+    const data = {
+      version: 1,
+      grid: { w: GRID_W, h: GRID_H },
+      rooms: state.rooms,
+      hallways: Array.from(state.hallways),
+      entities: state.entities,
+      groups: state.groups,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'level.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus('exported level.json');
+  });
+
+  document.getElementById('btn-import').addEventListener('click', () =>
+    document.getElementById('import-file').click());
+
+  document.getElementById('import-file').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const d = JSON.parse(ev.target.result);
+        state.rooms    = (d.rooms || []).map(r => ({ ...r }));
+        state.hallways = new Set(d.hallways || []);
+        state.entities = (d.entities || []).map(x => ({ ...x }));
+        state.groups   = Object.assign({}, d.groups || {});
+        if (!state.groups[state.currentGroup]) assignGroupColor(state.currentGroup);
+        state.nextId = 1 + Math.max(0,
+          ...state.rooms.map(r => r.id || 0),
+          ...state.entities.map(x => x.id || 0));
+        state.selected = null;
+        updateSelection(); updateGroupChips(); render();
+        setStatus(`imported ${state.rooms.length} rooms, ${state.entities.length} entities`);
+      } catch (err) { alert('Invalid JSON: ' + err.message); }
+    };
+    reader.readAsText(f);
+    e.target.value = '';
+  });
+
+  // ---- Boot ------------------------------------------------------------------
+  updateGroupChips();
+  render();
+  setStatus('ready · R room · H hallway · E entity · X erase · V select');
+})();
+</script>
+
+</body>
+</html>

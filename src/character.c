@@ -5,12 +5,13 @@
 // The model is authored so that, after t3d's Y-rotation convention, the nose
 // ends up 90° off from the control code's rot_y. Add π/2 at matrix build
 // time so main.c can keep using rot_y = atan2f(dx, dz) cleanly.
-#define CHARACTER_YAW_OFFSET 1.5707963f  // π/2
+#define CHARACTER_YAW_OFFSET 3.1415927f  // π (model faces +Z, needs 180° flip)
 
-// Walk cycle tuning.
+// Walk cycle tuning. Amplitudes match Caelum's reference char-editor
+// (~30° legs, ~25° arms, counter-phase).
 #define WALK_PHASE_GAIN    0.25f  // phase radians advanced per world unit moved
-#define WALK_SWING_LEG     0.50f  // peak leg swing amplitude (radians, ~29°)
-#define WALK_SWING_ARM     0.35f  // arms swing a bit less than legs
+#define WALK_SWING_LEG     0.52f  // peak leg swing amplitude (radians, ~30°)
+#define WALK_SWING_ARM     0.44f  // peak arm swing amplitude (radians, ~25°)
 #define WALK_EASE_OUT      0.12f  // per-frame decay when not moving
 
 // Part indices — must match the order of PARTS in tools/gen-character.py.
@@ -23,7 +24,10 @@
 #define IDX_LEG_R  6
 
 // Pivot Y in local/model space (matches scaled coords in character_model.h):
-// shoulders at y=11, hips at y=6. Rotation happens around these.
+// arm box spans y=6..11 → shoulder (top) pivot at y=11.
+// leg box spans y=0..6  → hip (top) pivot at y=6.
+// Rotation is around model X (forward/back pitch); X-position of the pivot
+// doesn't matter because X-rotation leaves X untouched.
 #define ARM_PIVOT_Y  11.0f
 #define LEG_PIVOT_Y   6.0f
 
@@ -190,9 +194,12 @@ void character_animate(Character *c, float speed)
     }
 }
 
-// Build a pivot-rotation matrix: translate to pivot, rotate around X, translate
-// back. Since pivots lie on X=0 and Z=0 with only Y non-zero, the net transform
-// simplifies to R(θ) plus a translation of (0, hy·(1-cosθ), -hy·sinθ).
+// Build X-axis rotation of theta around pivot (0, pivotY, 0).
+// t3d uses row-vector convention (v' = v · M, translation in M's bottom row),
+// and its R_x sends (0, py, 0) to (0, py·cos, py·sin) — so the displacement
+// needed to keep the pivot fixed is (I − R_x)·pivot = (0, py(1−cosθ), +py·sinθ).
+// NOTE the +z sign: a -py·sinθ here (standard column-vector math) flings the
+// limb off the body because t3d's rotation handedness is opposite.
 static void build_swing_matrix(T3DMat4FP *out, float pivotY, float theta)
 {
     float c = cosf(theta);
@@ -200,7 +207,7 @@ static void build_swing_matrix(T3DMat4FP *out, float pivotY, float theta)
     t3d_mat4fp_from_srt_euler(out,
         (float[3]){1.0f, 1.0f, 1.0f},
         (float[3]){theta, 0.0f, 0.0f},
-        (float[3]){0.0f, pivotY * (1.0f - c), -pivotY * s}
+        (float[3]){0.0f, pivotY * (1.0f - c), pivotY * s}
     );
 }
 
