@@ -32,3 +32,6 @@ Thumbs.db
 
 # Claude Code
 .claude/
+*.n64
+*.eeprom
+*.ram

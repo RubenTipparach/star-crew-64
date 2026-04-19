@@ -22,8 +22,8 @@ PROJECT_NAME = star-crew-64
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 OBJS = $(SOURCES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
 
-# Asset conversion - PNG to sprites
-assets_png = $(wildcard $(ASSETS_DIR)/*.png)
+# Asset conversion - PNG to sprites (top level + textures/ subdir)
+assets_png = $(wildcard $(ASSETS_DIR)/*.png) $(wildcard $(ASSETS_DIR)/textures/*.png)
 assets_sprites = $(addprefix filesystem/,$(notdir $(assets_png:%.png=%.sprite)))
 
 # Asset conversion - WAV to wav64
@@ -36,8 +36,14 @@ assets_conv = $(assets_sprites) $(assets_audio)
 # Main target
 all: $(PROJECT_NAME).z64
 
-# Convert PNG to sprite
+# Convert PNG to sprite (top-level)
 filesystem/%.sprite: $(ASSETS_DIR)/%.png
+	@mkdir -p $(dir $@)
+	@echo "    [SPRITE] $@"
+	$(N64_MKSPRITE) $(MKSPRITE_FLAGS) -f CI4 -o filesystem "$<"
+
+# Convert PNG to sprite (assets/textures/ subdir — same flags)
+filesystem/%.sprite: $(ASSETS_DIR)/textures/%.png
 	@mkdir -p $(dir $@)
 	@echo "    [SPRITE] $@"
 	$(N64_MKSPRITE) $(MKSPRITE_FLAGS) -f CI4 -o filesystem "$<"
