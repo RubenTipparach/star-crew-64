@@ -40,16 +40,24 @@
     <button id="tool-grab" class="active" title="Grab / select vertex (G)">Grab</button>
     <button id="tool-translate" title="Translate selected vertex (T)">Translate</button>
     <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <button id="btn-add-box" title="Spawn a new box (B)">+ Box</button>
+    <button id="btn-new-model" title="Start from scratch">New</button>
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
     <label for="file-load">Load…</label>
     <input id="file-load" type="file" accept="application/json" />
-    <button id="btn-save">Save</button>
+    <button id="btn-save" title="Download JSON to your device">Save / download</button>
     <button id="btn-reset">Reset view</button>
+    <label title="Toggle default grid texture on faces">
+      <input type="checkbox" id="chk-texture" checked style="vertical-align: middle;"> Texture
+    </label>
     <span id="info">no selection</span>
+    <span id="autosave-status" style="margin-left: 12px; font-size: 11px; color: #6a7a6a;">autosave: idle</span>
   </div>
   <div id="viewport"></div>
   <div id="hint">
     Grab: click a vertex to select. Translate: drag the gizmo (snaps to 0.1).
-    Keys: G = grab, T = translate, Esc = deselect. Right-drag to orbit, scroll to zoom.
+    Keys: G = grab, T = translate, B = spawn box, Esc = deselect.
+    Right-drag to orbit, scroll to zoom. Changes autosave in this browser.
   </div>
   <script type="module" src="./editor.js"></script>
 </body>
