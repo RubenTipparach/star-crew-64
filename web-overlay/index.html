@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>star-crew-64</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(circle at 30% 10%, #1e2340 0%, #0a0c16 60%);
+    color: #e6e8ef;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 40px 20px 60px;
+  }
+  header { text-align: center; margin-bottom: 32px; }
+  header h1 {
+    margin: 0;
+    font-size: clamp(28px, 5vw, 44px);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    background: linear-gradient(90deg, #8af, #c9f, #8af);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  header p {
+    margin: 10px 0 0; color: #8b94ab;
+    font-size: 14px; letter-spacing: 0.5px;
+  }
+
+  .menu {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+    width: 100%; max-width: 900px;
+  }
+  a.card {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 22px 20px;
+    background: rgba(28, 32, 48, 0.85);
+    border: 1px solid #2a2f44;
+    border-radius: 10px;
+    text-decoration: none; color: inherit;
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  a.card:hover, a.card:focus {
+    transform: translateY(-2px);
+    border-color: #4e9d7c;
+    background: rgba(40, 58, 52, 0.9);
+    outline: none;
+  }
+  a.card .icon {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 24px; color: #8af; letter-spacing: 2px;
+  }
+  a.card h2 {
+    margin: 0; font-size: 18px; color: #cfe;
+  }
+  a.card p {
+    margin: 0; font-size: 13px; color: #8b94ab; line-height: 1.5;
+  }
+
+  footer {
+    margin-top: auto; padding-top: 32px;
+    font-size: 11px; color: #555c74; letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  footer a { color: #6b7594; text-decoration: none; }
+  footer a:hover { color: #8af; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>star-crew-64</h1>
+    <p>N64 homebrew · playable in browser · built-in editors</p>
+  </header>
+
+  <nav class="menu">
+    <a class="card" href="emulator/">
+      <span class="icon">[&gt;_]</span>
+      <h2>Play</h2>
+      <p>Run the ROM in the rubens-ares WASM emulator. Loads automatically.</p>
+    </a>
+    <a class="card" href="tools/level-editor/">
+      <span class="icon">[::]</span>
+      <h2>Level editor</h2>
+      <p>Sketch rooms, hallways and entity placements. Autosaves in-browser.</p>
+    </a>
+    <a class="card" href="tools/model-editor/">
+      <span class="icon">[/\]</span>
+      <h2>Model editor</h2>
+      <p>Edit vertex meshes and spawn boxes. Autosaves in-browser.</p>
+    </a>
+  </nav>
+
+  <footer>
+    <a href="https://github.com/rubentipparach/star-crew-64">github.com/rubentipparach/star-crew-64</a>
+  </footer>
+</body>
+</html>

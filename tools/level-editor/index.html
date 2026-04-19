@@ -75,9 +75,11 @@
   <button class="action-btn danger" id="btn-clear">Clear all</button>
 
   <h2>I/O</h2>
-  <button class="action-btn" id="btn-export">Export JSON</button>
+  <button class="action-btn" id="btn-export">Save / download JSON</button>
   <button class="action-btn" id="btn-import">Import JSON</button>
+  <button class="action-btn danger" id="btn-clear-autosave">Clear autosave</button>
   <input type="file" id="import-file" accept=".json" hidden>
+  <div id="autosave-status" style="font-size:11px;color:#6a7a6a;margin-top:6px;">autosave: idle</div>
 
   <h2>Selected</h2>
   <div id="selection-panel">—</div>
@@ -101,6 +103,7 @@
   const GRID_W = 60;
   const GRID_H = 40;
   const CELL   = 20;
+  const AUTOSAVE_KEY = 'starCrew64.levelEditor.v1';
 
   const PALETTE = ['#5ae7ff','#ff6b6b','#ffd369','#72e37b','#c792ea',
                    '#ff9cee','#7be4c6','#ffb36b','#b7e34d','#8a9dff'];
@@ -126,6 +129,62 @@
   canvas.width  = GRID_W * CELL;
   canvas.height = GRID_H * CELL;
   const ctx = canvas.getContext('2d');
+
+  // ---- Serialization ---------------------------------------------------------
+  function serialize() {
+    return {
+      version: 1,
+      grid: { w: GRID_W, h: GRID_H },
+      rooms: state.rooms,
+      hallways: Array.from(state.hallways),
+      entities: state.entities,
+      groups: state.groups,
+    };
+  }
+
+  function applyLoaded(d) {
+    state.rooms    = (d.rooms || []).map(r => ({ ...r }));
+    state.hallways = new Set(d.hallways || []);
+    state.entities = (d.entities || []).map(x => ({ ...x }));
+    state.groups   = Object.assign({}, d.groups || {});
+    if (!state.groups[state.currentGroup]) assignGroupColor(state.currentGroup);
+    state.nextId = 1 + Math.max(0,
+      ...state.rooms.map(r => r.id || 0),
+      ...state.entities.map(x => x.id || 0));
+    state.selected = null;
+  }
+
+  // ---- Autosave (localStorage, debounced) ------------------------------------
+  let autosaveTimer = null;
+  function setAutosaveStatus(msg) {
+    const el = document.getElementById('autosave-status');
+    if (el) el.textContent = 'autosave: ' + msg;
+  }
+
+  function scheduleAutosave() {
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serialize()));
+        const t = new Date();
+        setAutosaveStatus('saved ' + t.toTimeString().slice(0, 8));
+      } catch (err) {
+        setAutosaveStatus('failed: ' + err.message);
+      }
+    }, 250);
+  }
+
+  function loadAutosave() {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return false;
+      applyLoaded(JSON.parse(raw));
+      return true;
+    } catch (err) {
+      console.warn('autosave load failed', err);
+      return false;
+    }
+  }
 
   // ---- Utilities -------------------------------------------------------------
   function key(x, y) { return x + ',' + y; }
@@ -419,11 +478,11 @@
   }
   window.__editorRenameRoom = (id, name) => {
     const r = state.rooms.find(x => x.id === id);
-    if (r) { r.name = name || r.name; render(); }
+    if (r) { r.name = name || r.name; render(); scheduleAutosave(); }
   };
   window.__editorSetEntityGroup = (id, g) => {
     const e = state.entities.find(x => x.id === id);
-    if (e) { e.group = g || 'default'; assignGroupColor(e.group); render(); updateGroupChips(); }
+    if (e) { e.group = g || 'default'; assignGroupColor(e.group); render(); updateGroupChips(); scheduleAutosave(); }
   };
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
@@ -439,18 +498,19 @@
     const c = cellAtEvent(e);
     if (!inBounds(c.x, c.y)) return;
 
+    let dirty = false;
     switch (state.tool) {
       case 'room':
         state.drag = c; state.dragCur = c;
         break;
       case 'hallway':
-        paintHallway(c.x, c.y);
+        paintHallway(c.x, c.y); dirty = true;
         break;
       case 'entity':
-        placeEntity(c.x, c.y);
+        placeEntity(c.x, c.y); dirty = true;
         break;
       case 'erase':
-        eraseAt(c.x, c.y);
+        eraseAt(c.x, c.y); dirty = true;
         break;
       case 'select': {
         const ent  = entityAt(c.x, c.y);
@@ -463,6 +523,7 @@
       }
     }
     render();
+    if (dirty) scheduleAutosave();
   });
 
   canvas.addEventListener('mousemove', e => {
@@ -471,18 +532,21 @@
       state.dragCur = c;
       render();
     } else if (state.mouseDown && inBounds(c.x, c.y)) {
-      if (state.tool === 'hallway') { paintHallway(c.x, c.y); render(); }
-      else if (state.tool === 'erase') { eraseAt(c.x, c.y); render(); }
+      if (state.tool === 'hallway') { paintHallway(c.x, c.y); render(); scheduleAutosave(); }
+      else if (state.tool === 'erase') { eraseAt(c.x, c.y); render(); scheduleAutosave(); }
     }
   });
 
   canvas.addEventListener('mouseup', () => {
     state.mouseDown = false;
+    let dirty = false;
     if (state.tool === 'room' && state.drag && state.dragCur) {
       placeRoom(state.drag.x, state.drag.y, state.dragCur.x, state.dragCur.y);
+      dirty = true;
     }
     state.drag = null; state.dragCur = null;
     render();
+    if (dirty) scheduleAutosave();
   });
 
   canvas.addEventListener('mouseleave', () => {
@@ -507,6 +571,7 @@
         state.entities = state.entities.filter(x => x !== state.selected.ref);
       state.selected = null;
       updateSelection(); render();
+      scheduleAutosave();
       e.preventDefault();
     }
   });
@@ -528,31 +593,39 @@
   document.getElementById('btn-generate').addEventListener('click', () => {
     generateSpaceship();
     updateSelection(); render();
+    scheduleAutosave();
   });
   document.getElementById('btn-clear').addEventListener('click', () => {
     if (!confirm('Clear the entire level?')) return;
     clearAll();
     updateSelection(); render();
     setStatus('cleared');
+    scheduleAutosave();
+  });
+  document.getElementById('btn-clear-autosave').addEventListener('click', () => {
+    if (!confirm('Delete the in-browser autosave? The current canvas stays.')) return;
+    try {
+      localStorage.removeItem(AUTOSAVE_KEY);
+      setAutosaveStatus('cleared');
+    } catch (err) { setAutosaveStatus('clear failed: ' + err.message); }
   });
 
   // ---- Export / import -------------------------------------------------------
+  // Save: creates an <a download> and clicks it. iOS Safari routes this
+  // through the share sheet, so "Save to Files" / AirDrop work on phones.
   document.getElementById('btn-export').addEventListener('click', () => {
-    const data = {
-      version: 1,
-      grid: { w: GRID_W, h: GRID_H },
-      rooms: state.rooms,
-      hallways: Array.from(state.hallways),
-      entities: state.entities,
-      groups: state.groups,
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(serialize(), null, 2)],
+                          { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = 'level.json';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(a.href);
-    setStatus('exported level.json');
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus('saved level.json (check Downloads / share sheet)');
   });
 
   document.getElementById('btn-import').addEventListener('click', () =>
@@ -563,18 +636,10 @@
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        const d = JSON.parse(ev.target.result);
-        state.rooms    = (d.rooms || []).map(r => ({ ...r }));
-        state.hallways = new Set(d.hallways || []);
-        state.entities = (d.entities || []).map(x => ({ ...x }));
-        state.groups   = Object.assign({}, d.groups || {});
-        if (!state.groups[state.currentGroup]) assignGroupColor(state.currentGroup);
-        state.nextId = 1 + Math.max(0,
-          ...state.rooms.map(r => r.id || 0),
-          ...state.entities.map(x => x.id || 0));
-        state.selected = null;
+        applyLoaded(JSON.parse(ev.target.result));
         updateSelection(); updateGroupChips(); render();
         setStatus(`imported ${state.rooms.length} rooms, ${state.entities.length} entities`);
+        scheduleAutosave();
       } catch (err) { alert('Invalid JSON: ' + err.message); }
     };
     reader.readAsText(f);
@@ -582,9 +647,17 @@
   });
 
   // ---- Boot ------------------------------------------------------------------
+  const restored = loadAutosave();
   updateGroupChips();
+  updateSelection();
   render();
-  setStatus('ready · R room · H hallway · E entity · X erase · V select');
+  if (restored) {
+    setStatus(`restored autosave · ${state.rooms.length} rooms, ${state.entities.length} entities`);
+    setAutosaveStatus('restored');
+  } else {
+    setStatus('ready · R room · H hallway · E entity · X erase · V select');
+    setAutosaveStatus('idle');
+  }
 })();
 </script>
 

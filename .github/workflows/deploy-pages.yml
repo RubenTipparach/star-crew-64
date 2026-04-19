@@ -171,23 +171,40 @@ jobs:
           path: artifacts/emu
 
       - name: Stage _site/
-        # The emulator's web/index.html auto-loads /rom.z64 on boot, so we
-        # copy the built game ROM alongside the emulator under that name.
-        # Then inject our mobile-debug.js so users on phones (no devtools)
-        # can see the autoload log + JS errors directly on the page.
+        # Layout:
+        #   _site/index.html            menu page (web-overlay/index.html)
+        #   _site/emulator/             rubens-ares WASM build
+        #   _site/tools/                in-browser editors (level + model)
+        #   _site/assets/               models + textures (fetched by editors)
+        #   _site/rom.z64               game ROM (emulator auto-loads /rom.z64)
+        #
+        # The emulator's index.html auto-loads /rom.z64 on boot via an
+        # absolute path, so the ROM still lives at the site root.
+        # mobile-debug.js is injected into the emulator page only, where
+        # users on phones (no devtools) can see autoload log + JS errors.
         run: |
           set -e
-          mkdir -p _site
-          cp artifacts/emu/index.html              _site/index.html
-          cp artifacts/emu/coi-serviceworker.js    _site/coi-serviceworker.js
-          cp artifacts/emu/ares.js                 _site/ares.js
-          cp artifacts/emu/ares.wasm               _site/ares.wasm
-          cp artifacts/emu/ares.data               _site/ares.data
+          mkdir -p _site/emulator _site/tools _site/assets
+          # Menu at the root.
+          cp web-overlay/index.html                _site/index.html
+          # Emulator under /emulator/.
+          cp artifacts/emu/index.html              _site/emulator/index.html
+          cp artifacts/emu/coi-serviceworker.js    _site/emulator/coi-serviceworker.js
+          cp artifacts/emu/ares.js                 _site/emulator/ares.js
+          cp artifacts/emu/ares.wasm               _site/emulator/ares.wasm
+          cp artifacts/emu/ares.data               _site/emulator/ares.data
+          cp web-overlay/mobile-debug.js           _site/emulator/mobile-debug.js
+          # Editors under /tools/.
+          cp -r tools/.                            _site/tools/
+          # Assets the editors fetch (e.g. default character model, textures).
+          cp -r assets/.                           _site/assets/
+          # ROM at site root so the emulator's `/rom.z64` fetch resolves.
           cp artifacts/rom/star-crew-64.z64        _site/rom.z64
-          cp web-overlay/mobile-debug.js           _site/mobile-debug.js
-          # Inject the debug overlay script just before </body>.
-          sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/index.html
+          # Inject the debug overlay script just before </body> of the emulator.
+          sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/emulator/index.html
           ls -la _site/
+          ls -la _site/emulator/
+          ls -la _site/tools/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
