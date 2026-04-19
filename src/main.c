@@ -14,6 +14,9 @@
 // Character movement speed in world units per frame (at ~60fps).
 #define MOVE_SPEED 0.6f
 
+// How quickly the hero rotates toward the stick direction (0..1 per frame).
+#define TURN_SMOOTHING 0.2f
+
 // Four point lights: two amber ones hovering over the airlock rows, one white
 // over the hallway centre, and one that follows the character (updated each
 // frame). Tuned so the interior reads as lit without swamping the key light.
@@ -79,7 +82,7 @@ int main(void)
         hero->position.v[2] += dz;
         float speed = sqrtf(dx * dx + dz * dz);
         if (speed > 0.01f) {
-            hero->rot_y = atan2f(dx, dz);
+            character_face_direction(hero, atan2f(dx, dz), TURN_SMOOTHING);
         }
 
         // character_animate(hero, speed);  // walk cycle disabled — swing needs tuning

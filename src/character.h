@@ -21,6 +21,10 @@ typedef struct {
 Character* character_create(void);
 void character_set_position(Character *c, float x, float y, float z);
 
+// Rotate toward target_yaw (radians) via shortest-arc slerp.
+// `smoothing` is a 0..1 per-frame factor: 1.0 snaps, ~0.2 is a smooth turn.
+void character_face_direction(Character *c, float target_yaw, float smoothing);
+
 // Advance the walk cycle proportionally to `speed` (world units/frame). Pass 0
 // when idle and the cycle gently eases back to rest.
 void character_animate(Character *c, float speed);

@@ -159,6 +159,19 @@ void character_set_position(Character *c, float x, float y, float z)
     c->position = (T3DVec3){{x, y, z}};
 }
 
+void character_face_direction(Character *c, float target_yaw, float smoothing)
+{
+    const float pi    = 3.1415927f;
+    const float twoPi = 6.2831853f;
+    float delta = target_yaw - c->rot_y;
+    // Wrap to [-π, π] so we always take the shorter way around the circle.
+    while (delta >  pi) delta -= twoPi;
+    while (delta < -pi) delta += twoPi;
+    c->rot_y += delta * smoothing;
+    while (c->rot_y >  pi) c->rot_y -= twoPi;
+    while (c->rot_y < -pi) c->rot_y += twoPi;
+}
+
 void character_animate(Character *c, float speed)
 {
     if (speed > 0.01f) {

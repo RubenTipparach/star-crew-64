@@ -23,7 +23,7 @@ git submodule update --init --recursive
 
 ## Local build (Windows / MSYS2)
 
-See `install.bat` and `build.bat`. Produces `star-crew-64.z64`, runnable in [ares](https://ares-emu.net/).
+See `install.bat` and `build-run.bat`. Produces `star-crew-64.z64` and launches it in [ares](https://ares-emu.net/).
 
 ## Browser build (CI)
 
