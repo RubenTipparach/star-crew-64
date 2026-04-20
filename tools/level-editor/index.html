@@ -47,8 +47,25 @@
   #selection-panel b { color: #8af; }
   #selection-panel input { margin-top: 4px; }
 
-  #canvas-wrap { flex: 1; overflow: auto; background: #0d0e14;
-                 display: flex; align-items: flex-start; }
+  #canvas-wrap { flex: 1; overflow: hidden; background: #0d0e14;
+                 display: flex; flex-direction: column; }
+  #tabs-bar { display: flex; background: #22232c; border-bottom: 1px solid #333;
+              flex-shrink: 0; overflow-x: auto; min-height: 34px; }
+  #tabs-bar .tab { padding: 6px 10px; cursor: pointer; background: transparent;
+                   color: #aaa; border: none; border-right: 1px solid #2a2d36;
+                   font-size: 12px; display: flex; align-items: center; gap: 6px;
+                   font-family: inherit; white-space: nowrap; }
+  #tabs-bar .tab:hover { background: #2a2d36; color: #ddd; }
+  #tabs-bar .tab.active { background: #2c5a4a; color: #cfe; border-bottom: 2px solid #4e9d7c; }
+  #tabs-bar .tab .close { color: #777; padding: 0 3px; border-radius: 2px; }
+  #tabs-bar .tab .close:hover { color: #f88; background: #3a2525; }
+  #tabs-bar .tab .dirty { color: #ffd369; margin-right: 2px; }
+  #tabs-bar .new-tab { color: #8af; border: none; background: transparent;
+                       cursor: pointer; font-size: 16px; padding: 4px 12px;
+                       font-family: inherit; }
+  #tabs-bar .new-tab:hover { background: #2a2d36; }
+
+  #canvas-scroll { flex: 1; overflow: auto; display: flex; align-items: flex-start; }
   canvas { display: block; cursor: crosshair; }
 
   #status { position: fixed; bottom: 0; left: 260px; right: 0;
@@ -74,6 +91,12 @@
   <button class="action-btn" id="btn-generate">Generate spaceship</button>
   <button class="action-btn danger" id="btn-clear">Clear all</button>
 
+  <h2>Game levels</h2>
+  <select id="game-level-select" style="width:100%; background:#1a1b22; color:#ddd; border:1px solid #3a3d48; padding:5px; border-radius:3px; font-size:12px;">
+    <option value="">(loading…)</option>
+  </select>
+  <button class="action-btn" id="btn-load-game-level">Open in new tab</button>
+
   <h2>I/O</h2>
   <button class="action-btn" id="btn-export">Save / download JSON</button>
   <button class="action-btn" id="btn-import">Import JSON</button>
@@ -92,7 +115,8 @@
 </div>
 
 <div id="canvas-wrap">
-  <canvas id="canvas"></canvas>
+  <div id="tabs-bar"></div>
+  <div id="canvas-scroll"><canvas id="canvas"></canvas></div>
 </div>
 
 <div id="status">ready</div>
@@ -103,26 +127,43 @@
   const GRID_W = 60;
   const GRID_H = 40;
   const CELL   = 20;
-  const AUTOSAVE_KEY = 'starCrew64.levelEditor.v1';
+  const AUTOSAVE_KEY = 'starCrew64.levelEditor.v2'; // v2: multi-tab format
 
   const PALETTE = ['#5ae7ff','#ff6b6b','#ffd369','#72e37b','#c792ea',
                    '#ff9cee','#7be4c6','#ffb36b','#b7e34d','#8a9dff'];
 
-  // ---- State -----------------------------------------------------------------
-  const state = {
-    rooms: [],               // {id, x, y, w, h, name}
-    hallways: new Set(),     // "x,y"
-    entities: [],            // {id, x, y, group}
-    groups: {},              // name -> color
+  // ---- Shared UI state (not persisted) ---------------------------------------
+  const ui = {
     tool: 'room',
     currentGroup: 'crew',
-    selected: null,          // {kind: 'room'|'entity', ref}
-    drag: null,              // {x, y} start cell for rect-drag tools
+    drag: null,
     dragCur: null,
     mouseDown: false,
-    nextId: 1,
   };
-  assignGroupColor('crew');
+
+  // ---- Per-document state ----------------------------------------------------
+  // `state` is reassigned on tab switch; all event handlers below capture the
+  // binding (not the value), so they transparently see the active document.
+  let docs = [];
+  let state = null;
+  let activeDocId = null;
+
+  function newDocId() {
+    return 'doc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  }
+
+  function newDoc(name) {
+    return {
+      id: newDocId(),
+      name: name || 'Untitled',
+      rooms: [],
+      hallways: new Set(),
+      entities: [],
+      groups: {},
+      selected: null,
+      nextId: 1,
+    };
+  }
 
   // ---- Canvas ----------------------------------------------------------------
   const canvas = document.getElementById('canvas');
@@ -131,27 +172,32 @@
   const ctx = canvas.getContext('2d');
 
   // ---- Serialization ---------------------------------------------------------
-  function serialize() {
+  // The active document only. Used for manual download + per-doc autosave entry.
+  function serializeDoc(d) {
     return {
       version: 1,
       grid: { w: GRID_W, h: GRID_H },
-      rooms: state.rooms,
-      hallways: Array.from(state.hallways),
-      entities: state.entities,
-      groups: state.groups,
+      name: d.name,
+      rooms: d.rooms,
+      hallways: Array.from(d.hallways),
+      entities: d.entities,
+      groups: d.groups,
     };
   }
 
-  function applyLoaded(d) {
-    state.rooms    = (d.rooms || []).map(r => ({ ...r }));
-    state.hallways = new Set(d.hallways || []);
-    state.entities = (d.entities || []).map(x => ({ ...x }));
-    state.groups   = Object.assign({}, d.groups || {});
-    if (!state.groups[state.currentGroup]) assignGroupColor(state.currentGroup);
-    state.nextId = 1 + Math.max(0,
-      ...state.rooms.map(r => r.id || 0),
-      ...state.entities.map(x => x.id || 0));
-    state.selected = null;
+  // Parse a level JSON into a fresh Doc struct.
+  function parseDoc(raw, fallbackName) {
+    const name = raw.name || fallbackName || 'Untitled';
+    const d = newDoc(name);
+    d.rooms    = (raw.rooms || []).map(r => ({ ...r }));
+    d.hallways = new Set(raw.hallways || []);
+    d.entities = (raw.entities || []).map(x => ({ ...x }));
+    d.groups   = Object.assign({}, raw.groups || {});
+    d.nextId = 1 + Math.max(0,
+      ...d.rooms.map(r => r.id || 0),
+      ...d.entities.map(x => x.id || 0));
+    d.selected = null;
+    return d;
   }
 
   // ---- Autosave (localStorage, debounced) ------------------------------------
@@ -161,11 +207,27 @@
     if (el) el.textContent = 'autosave: ' + msg;
   }
 
+  function serializeAllDocs() {
+    return {
+      version: 2,
+      activeId: activeDocId,
+      docs: docs.map(d => ({
+        id: d.id,
+        name: d.name,
+        rooms: d.rooms,
+        hallways: Array.from(d.hallways),
+        entities: d.entities,
+        groups: d.groups,
+        nextId: d.nextId,
+      })),
+    };
+  }
+
   function scheduleAutosave() {
     if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       try {
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serialize()));
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(serializeAllDocs()));
         const t = new Date();
         setAutosaveStatus('saved ' + t.toTimeString().slice(0, 8));
       } catch (err) {
@@ -178,12 +240,127 @@
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
       if (!raw) return false;
-      applyLoaded(JSON.parse(raw));
-      return true;
+      const payload = JSON.parse(raw);
+      // v2: {version:2, activeId, docs:[...]}
+      if (payload && payload.version === 2 && Array.isArray(payload.docs) && payload.docs.length > 0) {
+        docs = payload.docs.map(p => {
+          const d = newDoc(p.name);
+          d.id = p.id || d.id;
+          d.rooms = (p.rooms || []).map(r => ({ ...r }));
+          d.hallways = new Set(p.hallways || []);
+          d.entities = (p.entities || []).map(x => ({ ...x }));
+          d.groups = Object.assign({}, p.groups || {});
+          d.nextId = p.nextId || 1;
+          return d;
+        });
+        activeDocId = payload.activeId && docs.find(d => d.id === payload.activeId)
+          ? payload.activeId : docs[0].id;
+        state = docs.find(d => d.id === activeDocId);
+        return true;
+      }
+      // v1 fallback: single doc payload
+      if (payload && (Array.isArray(payload.rooms) || Array.isArray(payload.entities))) {
+        const d = parseDoc(payload, 'Restored');
+        docs = [d];
+        activeDocId = d.id;
+        state = d;
+        return true;
+      }
+      return false;
     } catch (err) {
       console.warn('autosave load failed', err);
       return false;
     }
+  }
+
+  // ---- Tab management --------------------------------------------------------
+  function addDoc(d, { activate = true } = {}) {
+    docs.push(d);
+    if (activate) switchToDoc(d.id);
+    else renderTabs();
+    scheduleAutosave();
+  }
+
+  function switchToDoc(id) {
+    const next = docs.find(d => d.id === id);
+    if (!next) return;
+    activeDocId = id;
+    state = next;
+    if (!state.groups[ui.currentGroup]) assignGroupColor(ui.currentGroup);
+    renderTabs();
+    updateSelection();
+    updateGroupChips();
+    render();
+    scheduleAutosave();
+  }
+
+  function closeDoc(id) {
+    const idx = docs.findIndex(d => d.id === id);
+    if (idx < 0) return;
+    docs.splice(idx, 1);
+    if (docs.length === 0) {
+      const blank = newDoc('Untitled');
+      docs.push(blank);
+      activeDocId = blank.id;
+      state = blank;
+      assignGroupColor(ui.currentGroup);
+    } else if (activeDocId === id) {
+      const next = docs[Math.min(idx, docs.length - 1)];
+      activeDocId = next.id;
+      state = next;
+    }
+    renderTabs();
+    updateSelection();
+    updateGroupChips();
+    render();
+    scheduleAutosave();
+  }
+
+  function renameActive(newName) {
+    if (!state) return;
+    state.name = newName || state.name;
+    renderTabs();
+    scheduleAutosave();
+  }
+
+  function renderTabs() {
+    const bar = document.getElementById('tabs-bar');
+    bar.innerHTML = '';
+    for (const d of docs) {
+      const el = document.createElement('button');
+      el.className = 'tab' + (d.id === activeDocId ? ' active' : '');
+      el.title = 'Click to switch · double-click to rename';
+      const label = document.createElement('span');
+      label.textContent = d.name;
+      el.appendChild(label);
+      if (docs.length > 1) {
+        const close = document.createElement('span');
+        close.className = 'close';
+        close.textContent = '×';
+        close.title = 'Close tab';
+        close.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          closeDoc(d.id);
+        });
+        el.appendChild(close);
+      }
+      el.addEventListener('click', () => switchToDoc(d.id));
+      el.addEventListener('dblclick', () => {
+        const n = prompt('Rename tab', d.name);
+        if (n && n.trim()) {
+          d.name = n.trim();
+          renderTabs();
+          scheduleAutosave();
+        }
+      });
+      bar.appendChild(el);
+    }
+    const add = document.createElement('button');
+    add.className = 'new-tab';
+    add.textContent = '+';
+    add.title = 'New blank level';
+    add.addEventListener('click', () => addDoc(newDoc('Untitled ' + (docs.length + 1))));
+    bar.appendChild(add);
   }
 
   // ---- Utilities -------------------------------------------------------------
@@ -283,11 +460,11 @@
     }
 
     // drag preview
-    if (state.tool === 'room' && state.drag && state.dragCur) {
-      const x1 = Math.min(state.drag.x, state.dragCur.x);
-      const y1 = Math.min(state.drag.y, state.dragCur.y);
-      const x2 = Math.max(state.drag.x, state.dragCur.x);
-      const y2 = Math.max(state.drag.y, state.dragCur.y);
+    if (ui.tool === 'room' && ui.drag && ui.dragCur) {
+      const x1 = Math.min(ui.drag.x, ui.dragCur.x);
+      const y1 = Math.min(ui.drag.y, ui.dragCur.y);
+      const x2 = Math.max(ui.drag.x, ui.dragCur.x);
+      const y2 = Math.max(ui.drag.y, ui.dragCur.y);
       const w = x2 - x1 + 1, h = y2 - y1 + 1;
       const ok = w >= 2 && h >= 2 && !roomsOverlap(x1, y1, w, h);
       ctx.strokeStyle = ok ? '#72e37b' : '#ff6b6b';
@@ -336,7 +513,7 @@
   function placeEntity(x, y) {
     if (!inBounds(x, y)) return;
     if (entityAt(x, y)) return;
-    const g = state.currentGroup || 'default';
+    const g = ui.currentGroup || 'default';
     assignGroupColor(g);
     state.entities.push({ id: state.nextId++, x, y, group: g });
   }
@@ -433,9 +610,9 @@
 
   // ---- UI glue ---------------------------------------------------------------
   function setTool(t) {
-    state.tool = t;
-    state.drag = null;
-    state.dragCur = null;
+    ui.tool = t;
+    ui.drag = null;
+    ui.dragCur = null;
     for (const btn of document.querySelectorAll('.tool-btn')) {
       btn.classList.toggle('active', btn.dataset.tool === t);
     }
@@ -443,7 +620,7 @@
   }
 
   function setCurrentGroup(g) {
-    state.currentGroup = g;
+    ui.currentGroup = g;
     document.getElementById('group-input').value = g;
     assignGroupColor(g);
     updateGroupChips();
@@ -453,7 +630,7 @@
   function updateGroupChips() {
     const chips = document.getElementById('group-chips');
     chips.innerHTML = Object.entries(state.groups).map(([g, c]) =>
-      `<span class="group-chip${g === state.currentGroup ? ' current' : ''}"
+      `<span class="group-chip${g === ui.currentGroup ? ' current' : ''}"
              style="background:${c}"
              onclick="__editorSetCurrentGroup(${JSON.stringify(g)})">${escapeHtml(g)}</span>`
     ).join('');
@@ -494,14 +671,14 @@
   // ---- Mouse -----------------------------------------------------------------
   canvas.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
-    state.mouseDown = true;
+    ui.mouseDown = true;
     const c = cellAtEvent(e);
     if (!inBounds(c.x, c.y)) return;
 
     let dirty = false;
-    switch (state.tool) {
+    switch (ui.tool) {
       case 'room':
-        state.drag = c; state.dragCur = c;
+        ui.drag = c; ui.dragCur = c;
         break;
       case 'hallway':
         paintHallway(c.x, c.y); dirty = true;
@@ -528,30 +705,30 @@
 
   canvas.addEventListener('mousemove', e => {
     const c = cellAtEvent(e);
-    if (state.tool === 'room' && state.drag) {
-      state.dragCur = c;
+    if (ui.tool === 'room' && ui.drag) {
+      ui.dragCur = c;
       render();
-    } else if (state.mouseDown && inBounds(c.x, c.y)) {
-      if (state.tool === 'hallway') { paintHallway(c.x, c.y); render(); scheduleAutosave(); }
-      else if (state.tool === 'erase') { eraseAt(c.x, c.y); render(); scheduleAutosave(); }
+    } else if (ui.mouseDown && inBounds(c.x, c.y)) {
+      if (ui.tool === 'hallway') { paintHallway(c.x, c.y); render(); scheduleAutosave(); }
+      else if (ui.tool === 'erase') { eraseAt(c.x, c.y); render(); scheduleAutosave(); }
     }
   });
 
   canvas.addEventListener('mouseup', () => {
-    state.mouseDown = false;
+    ui.mouseDown = false;
     let dirty = false;
-    if (state.tool === 'room' && state.drag && state.dragCur) {
-      placeRoom(state.drag.x, state.drag.y, state.dragCur.x, state.dragCur.y);
+    if (ui.tool === 'room' && ui.drag && ui.dragCur) {
+      placeRoom(ui.drag.x, ui.drag.y, ui.dragCur.x, ui.dragCur.y);
       dirty = true;
     }
-    state.drag = null; state.dragCur = null;
+    ui.drag = null; ui.dragCur = null;
     render();
     if (dirty) scheduleAutosave();
   });
 
   canvas.addEventListener('mouseleave', () => {
-    state.mouseDown = false;
-    state.drag = null; state.dragCur = null;
+    ui.mouseDown = false;
+    ui.drag = null; ui.dragCur = null;
     render();
   });
 
@@ -584,8 +761,8 @@
   // ---- Group input -----------------------------------------------------------
   const groupInput = document.getElementById('group-input');
   groupInput.addEventListener('input', () => {
-    state.currentGroup = groupInput.value.trim() || 'default';
-    assignGroupColor(state.currentGroup);
+    ui.currentGroup = groupInput.value.trim() || 'default';
+    assignGroupColor(ui.currentGroup);
     updateGroupChips();
   });
 
@@ -636,23 +813,76 @@
     const reader = new FileReader();
     reader.onload = ev => {
       try {
-        applyLoaded(JSON.parse(ev.target.result));
-        updateSelection(); updateGroupChips(); render();
-        setStatus(`imported ${state.rooms.length} rooms, ${state.entities.length} entities`);
-        scheduleAutosave();
+        const raw = JSON.parse(ev.target.result);
+        const d = parseDoc(raw, f.name.replace(/\.json$/i, '') || 'Imported');
+        addDoc(d); // opens in a new tab and activates it
+        setStatus(`imported ${d.rooms.length} rooms, ${d.entities.length} entities into new tab`);
       } catch (err) { alert('Invalid JSON: ' + err.message); }
     };
     reader.readAsText(f);
     e.target.value = '';
   });
 
+  // ---- Game levels picker ----------------------------------------------------
+  // Loads levels/levels.json for the list, then fetches the selected source
+  // and opens it in a new tab. The editor is served from /tools/level-editor/
+  // so ../../levels/ resolves to the site root.
+  async function populateGameLevels() {
+    const sel = document.getElementById('game-level-select');
+    try {
+      const res = await fetch('../../levels/levels.json');
+      if (!res.ok) throw new Error(res.statusText);
+      const manifest = await res.json();
+      const maps = manifest.maps || {};
+      sel.innerHTML = '';
+      for (const [key, entry] of Object.entries(maps)) {
+        const opt = document.createElement('option');
+        opt.value = entry.source || (key + '.json');
+        opt.textContent = key + (entry.description ? ` — ${entry.description}` : '');
+        sel.appendChild(opt);
+      }
+      if (!sel.options.length) {
+        sel.innerHTML = '<option value="">(no levels listed)</option>';
+      }
+    } catch (err) {
+      console.warn('levels manifest fetch failed', err);
+      sel.innerHTML = '<option value="">(offline — no manifest)</option>';
+    }
+  }
+
+  document.getElementById('btn-load-game-level').addEventListener('click', async () => {
+    const sel = document.getElementById('game-level-select');
+    const src = sel.value;
+    if (!src) { setStatus('no level selected'); return; }
+    try {
+      const res = await fetch('../../levels/' + src);
+      if (!res.ok) throw new Error(res.statusText);
+      const raw = await res.json();
+      const d = parseDoc(raw, src.replace(/\.json$/i, ''));
+      addDoc(d);
+      setStatus(`opened ${d.name} in new tab`);
+    } catch (err) {
+      alert('Load failed: ' + err.message);
+    }
+  });
+
   // ---- Boot ------------------------------------------------------------------
   const restored = loadAutosave();
+  if (!restored) {
+    const d = newDoc('Untitled');
+    docs = [d];
+    activeDocId = d.id;
+    state = d;
+  }
+  // Ensure the current group has a colour in the active doc.
+  assignGroupColor(ui.currentGroup);
+  renderTabs();
   updateGroupChips();
   updateSelection();
   render();
+  populateGameLevels();
   if (restored) {
-    setStatus(`restored autosave · ${state.rooms.length} rooms, ${state.entities.length} entities`);
+    setStatus(`restored ${docs.length} tab${docs.length === 1 ? '' : 's'} · ${state.rooms.length} rooms, ${state.entities.length} entities`);
     setAutosaveStatus('restored');
   } else {
     setStatus('ready · R room · H hallway · E entity · X erase · V select');

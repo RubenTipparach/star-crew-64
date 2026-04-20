@@ -19,10 +19,13 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 
 const GRID = 0.1;
 const VERT_RADIUS = 0.02;
-const AUTOSAVE_KEY = "starCrew64.modelEditor.v1";
+const AUTOSAVE_KEY = "starCrew64.modelEditor.v2"; // v2: multi-tab
 
-// ---------- default model: loaded from assets/models/character.json ----------
-const DEFAULT_MODEL_URL = "../../assets/models/character.json";
+// Paths to the in-repo asset catalogs (the workflow copies these into _site/).
+const MODELS_MANIFEST_URL   = "../../assets/models/models.json";
+const TEXTURES_MANIFEST_URL = "../../assets/textures/textures.json";
+const MODEL_DIR_URL         = "../../assets/models/";
+const TEXTURE_DIR_URL       = "../../assets/textures/";
 
 // ---------- scene setup ----------
 const viewport = document.getElementById("viewport");
@@ -101,11 +104,30 @@ function buildDefaultTexture() {
 const DEFAULT_TEXTURE = buildDefaultTexture();
 
 // ---------- model state ----------
-let model = null;          // the JSON in memory
+// Each tab = { id, name, model, textureKey } where textureKey is "default",
+// "none", or the name of a texture in the textures manifest.
+// `model` is a live alias pointing at the active tab's model so the rest of
+// the editor continues to work against a single reference.
+let tabs = [];
+let activeTabId = null;
+let model = null;           // the active tab's model
 let meshGroup = null;       // THREE.Group holding face mesh + vertex spheres
 let faceMesh = null;        // THREE.Mesh (triangles)
 let vertsObj = null;        // THREE.InstancedMesh of vertex spheres (for picking)
 const vertMatrix = new THREE.Matrix4();
+
+function newTabId() {
+  return "tab_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+}
+function newTab(name, modelPayload, textureKey = "default") {
+  return {
+    id: newTabId(),
+    name: name || "Untitled",
+    model: modelPayload || emptyModel(name),
+    textureKey,
+  };
+}
+function activeTab() { return tabs.find(t => t.id === activeTabId) || null; }
 
 const selectionProxy = new THREE.Object3D();
 scene.add(selectionProxy);
@@ -345,78 +367,254 @@ window.addEventListener("keydown", (ev) => {
 });
 
 // ---------- box spawning ----------
-// Append a 0.2-unit cube centred somewhere close to the current view target so
-// the user sees it appear. Each box is registered as its own "part" entry.
-let spawnCount = 0;
+// Append a 0.2-unit cube; offset so repeated spawns don't stack. Registered
+// as its own "part" entry so the N64 build can draw it independently.
 function addBox() {
-  if (!model) {
-    model = emptyModel();
-  }
+  if (!model) return;
   const vStart = model.vertices.length;
-  const s = 0.1; // half-size → 0.2-unit cube
-  // Offset each new cube a bit so they don't all stack.
-  const ox = Math.round((spawnCount % 4 - 1.5) * 0.3 / GRID) * GRID;
-  const oz = Math.round((Math.floor(spawnCount / 4) - 1) * 0.3 / GRID) * GRID;
-  const oy = 0.0;
-  spawnCount++;
+  const s = 0.1;
+  const parts = Array.isArray(model.parts) ? model.parts : (model.parts = []);
+  const n = parts.length; // use the part count as the deterministic offset key
+  const ox = Math.round((n % 4 - 1.5) * 0.3 / GRID) * GRID;
+  const oz = Math.round((Math.floor(n / 4) - 1) * 0.3 / GRID) * GRID;
   const verts = [
-    [-s + ox,      oy, -s + oz],
-    [ s + ox,      oy, -s + oz],
-    [ s + ox,      oy,  s + oz],
-    [-s + ox,      oy,  s + oz],
-    [-s + ox, 2 * s + oy, -s + oz],
-    [ s + ox, 2 * s + oy, -s + oz],
-    [ s + ox, 2 * s + oy,  s + oz],
-    [-s + ox, 2 * s + oy,  s + oz],
+    [-s + ox,     0, -s + oz], [ s + ox,     0, -s + oz],
+    [ s + ox,     0,  s + oz], [-s + ox,     0,  s + oz],
+    [-s + ox, 2 * s, -s + oz], [ s + ox, 2 * s, -s + oz],
+    [ s + ox, 2 * s,  s + oz], [-s + ox, 2 * s,  s + oz],
   ];
   const tris = [
-    [0, 2, 1], [0, 3, 2],
-    [4, 5, 6], [4, 6, 7],
-    [0, 1, 5], [0, 5, 4],
-    [3, 6, 2], [3, 7, 6],
-    [0, 4, 7], [0, 7, 3],
-    [1, 2, 6], [1, 6, 5],
+    [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+    [0, 1, 5], [0, 5, 4], [3, 6, 2], [3, 7, 6],
+    [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
   ];
   for (const v of verts) model.vertices.push(v);
   for (const t of tris) model.triangles.push([t[0] + vStart, t[1] + vStart, t[2] + vStart]);
-  if (!Array.isArray(model.parts)) model.parts = [];
-  model.parts.push({
-    name: `box_${model.parts.length + 1}`,
-    vertex_start: vStart,
-    vertex_count: 8,
-  });
+  parts.push({ name: `box_${n + 1}`, vertex_start: vStart, vertex_count: 8 });
   buildMesh();
   selectVertex(-1);
   scheduleAutosave();
 }
 
-function emptyModel() {
-  return { name: "untitled", grid: GRID, parts: [], vertices: [], triangles: [] };
+function emptyModel(name) {
+  return {
+    name: name || "untitled",
+    grid: GRID,
+    parts: [],
+    vertices: [],
+    triangles: [],
+  };
+}
+
+// ---------- textures ----------
+// Built-in textures from /assets/textures/textures.json. Cached by name so we
+// only decode each PNG once per session.
+const TEXTURE_CACHE = new Map();
+let textureManifest = [];
+
+function getTextureByKey(key) {
+  if (key === "none") return null;
+  if (key === "default" || !key) return DEFAULT_TEXTURE;
+  if (TEXTURE_CACHE.has(key)) return TEXTURE_CACHE.get(key);
+  const entry = textureManifest.find(t => t.name === key);
+  if (!entry) return DEFAULT_TEXTURE;
+  const loader = new THREE.TextureLoader();
+  const tex = loader.load(TEXTURE_DIR_URL + entry.source, () => { tex.needsUpdate = true; });
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  TEXTURE_CACHE.set(key, tex);
+  return tex;
+}
+
+function applyTextureKey(key) {
+  const tex = getTextureByKey(key);
+  FACE_MAT.map = tex;
+  // When a real texture is showing, leave material colour white so the
+  // texture colours come through unaltered. When "none", fall back to grey.
+  FACE_MAT.color.set(tex ? 0xffffff : 0xcad0db);
+  FACE_MAT.needsUpdate = true;
+  const sel = document.getElementById("texture-select");
+  if (sel && sel.value !== key) sel.value = key;
+}
+
+async function populateTextureSelect() {
+  const sel = document.getElementById("texture-select");
+  try {
+    const res = await fetch(TEXTURES_MANIFEST_URL);
+    if (!res.ok) throw new Error(res.statusText);
+    const manifest = await res.json();
+    textureManifest = Array.isArray(manifest.textures) ? manifest.textures : [];
+    for (const t of textureManifest) {
+      const opt = document.createElement("option");
+      opt.value = t.name;
+      opt.textContent = t.name;
+      sel.appendChild(opt);
+    }
+  } catch (err) {
+    console.warn("textures manifest fetch failed", err);
+  }
+  // The initial model load may have completed before the manifest arrived —
+  // re-apply so named textures (e.g. "character") actually bind now.
+  const t = activeTab();
+  if (t) applyTextureKey(t.textureKey || "default");
+}
+
+// ---------- game models ----------
+let modelManifest = [];
+async function populateGameModels() {
+  const sel = document.getElementById("game-model-select");
+  try {
+    const res = await fetch(MODELS_MANIFEST_URL);
+    if (!res.ok) throw new Error(res.statusText);
+    const manifest = await res.json();
+    modelManifest = Array.isArray(manifest.models) ? manifest.models : [];
+    sel.innerHTML = "";
+    for (const m of modelManifest) {
+      const opt = document.createElement("option");
+      opt.value = m.name;
+      opt.textContent = m.name + (m.description ? ` — ${m.description}` : "");
+      sel.appendChild(opt);
+    }
+    if (!sel.options.length) {
+      sel.innerHTML = '<option value="">(no models listed)</option>';
+    }
+  } catch (err) {
+    console.warn("models manifest fetch failed", err);
+    sel.innerHTML = '<option value="">(offline — no manifest)</option>';
+  }
+}
+
+async function openGameModel(name) {
+  const entry = modelManifest.find(m => m.name === name);
+  if (!entry) return;
+  try {
+    const res = await fetch(MODEL_DIR_URL + entry.source);
+    if (!res.ok) throw new Error(res.statusText);
+    const payload = await res.json();
+    payload.name = payload.name || entry.name;
+    addTab(newTab(entry.name, payload, entry.texture || "default"));
+  } catch (err) {
+    alert("Load failed: " + err.message);
+  }
+}
+
+// ---------- tabs ----------
+function addTab(tab, { activate = true } = {}) {
+  tabs.push(tab);
+  if (activate) switchTab(tab.id);
+  else renderTabs();
+  scheduleAutosave();
+}
+
+function switchTab(id) {
+  const next = tabs.find(t => t.id === id);
+  if (!next) return;
+  activeTabId = id;
+  model = next.model;
+  applyTextureKey(next.textureKey || "default");
+  renderTabs();
+  buildMesh();
+  selectVertex(-1);
+  scheduleAutosave();
+}
+
+function closeTab(id) {
+  const idx = tabs.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  tabs.splice(idx, 1);
+  if (tabs.length === 0) {
+    const blank = newTab("Untitled", emptyModel("Untitled"), "default");
+    tabs.push(blank);
+    activeTabId = blank.id;
+    model = blank.model;
+  } else if (activeTabId === id) {
+    const next = tabs[Math.min(idx, tabs.length - 1)];
+    activeTabId = next.id;
+    model = next.model;
+  }
+  const active = activeTab();
+  applyTextureKey(active ? (active.textureKey || "default") : "default");
+  renderTabs();
+  buildMesh();
+  selectVertex(-1);
+  scheduleAutosave();
+}
+
+function renameTab(id, name) {
+  const t = tabs.find(x => x.id === id);
+  if (!t || !name) return;
+  t.name = name;
+  if (t.model) t.model.name = name;
+  renderTabs();
+  scheduleAutosave();
+}
+
+function renderTabs() {
+  const bar = document.getElementById("tabs-bar");
+  if (!bar) return;
+  bar.innerHTML = "";
+  for (const t of tabs) {
+    const el = document.createElement("button");
+    el.className = "tab" + (t.id === activeTabId ? " active" : "");
+    el.title = "Click to switch · double-click to rename";
+    const label = document.createElement("span");
+    label.textContent = t.name;
+    el.appendChild(label);
+    if (tabs.length > 1) {
+      const close = document.createElement("span");
+      close.className = "close";
+      close.textContent = "×";
+      close.title = "Close tab";
+      close.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        closeTab(t.id);
+      });
+      el.appendChild(close);
+    }
+    el.addEventListener("click", () => switchTab(t.id));
+    el.addEventListener("dblclick", () => {
+      const n = prompt("Rename tab", t.name);
+      if (n && n.trim()) renameTab(t.id, n.trim());
+    });
+    bar.appendChild(el);
+  }
+  const add = document.createElement("button");
+  add.className = "new-tab";
+  add.textContent = "+";
+  add.title = "New empty tab";
+  add.addEventListener("click", () => {
+    const n = `Untitled ${tabs.length + 1}`;
+    addTab(newTab(n, emptyModel(n), "default"));
+    addBox();
+  });
+  bar.appendChild(add);
 }
 
 // ---------- load / save ----------
-async function loadModel() {
-  // Priority: localStorage autosave → default-URL fetch → empty fallback.
-  const restored = loadAutosave();
-  if (restored) {
-    model = restored;
-    buildMesh();
-    selectVertex(-1);
+async function loadInitial() {
+  // Priority: autosave (multi-tab) → default-URL fetch → empty fallback.
+  if (loadAutosave()) {
+    const t = activeTab();
+    if (t) {
+      applyTextureKey(t.textureKey || "default");
+      buildMesh();
+      selectVertex(-1);
+    }
+    renderTabs();
     setAutosaveStatus("restored");
     return;
   }
   try {
-    const res = await fetch(DEFAULT_MODEL_URL);
+    const res = await fetch(MODEL_DIR_URL + "character.json");
     if (!res.ok) throw new Error(res.statusText);
-    model = await res.json();
-    buildMesh();
-    selectVertex(-1);
+    const payload = await res.json();
+    addTab(newTab(payload.name || "character", payload, "character"));
     setAutosaveStatus("idle");
   } catch (err) {
     console.warn("Could not fetch default model:", err);
-    model = emptyModel();
-    buildMesh();
-    addBox(); // give the user something to edit
+    addTab(newTab("Untitled", emptyModel("Untitled"), "default"));
+    addBox();
     setAutosaveStatus("idle (new)");
   }
 }
@@ -426,21 +624,21 @@ document.getElementById("file-load").addEventListener("change", async (ev) => {
   if (!file) return;
   const text = await file.text();
   try {
-    model = JSON.parse(text);
-    if (!Array.isArray(model.vertices) || !Array.isArray(model.triangles)) {
+    const payload = JSON.parse(text);
+    if (!Array.isArray(payload.vertices) || !Array.isArray(payload.triangles)) {
       throw new Error("missing vertices/triangles");
     }
-    buildMesh();
-    selectVertex(-1);
-    scheduleAutosave();
+    const name = payload.name || file.name.replace(/\.json$/i, "") || "Imported";
+    addTab(newTab(name, payload, "default"));
   } catch (err) {
     alert("Invalid model JSON: " + err.message);
   }
   ev.target.value = "";
 });
 
-// Manual save: writes a .json via <a download>.  On iOS/Android this
-// triggers the OS download or share sheet so the user can save to Files.
+// Manual save: writes the active tab's model as .json via <a download>. On
+// iOS/Android this triggers the OS download or share sheet so the user can
+// save to Files.
 document.getElementById("btn-save").addEventListener("click", () => {
   if (!model) return;
   const blob = new Blob([JSON.stringify(model, null, 2)], { type: "application/json" });
@@ -464,19 +662,24 @@ document.getElementById("btn-reset").addEventListener("click", () => {
 document.getElementById("btn-add-box").addEventListener("click", addBox);
 
 document.getElementById("btn-new-model").addEventListener("click", () => {
-  if (!confirm("Start a new empty model? Your current autosave will be overwritten the next time you edit.")) return;
-  model = emptyModel();
-  spawnCount = 0;
-  addBox(); // spawn one box so there's something visible
+  const n = `Untitled ${tabs.length + 1}`;
+  addTab(newTab(n, emptyModel(n), "default"));
+  addBox();
+});
+
+document.getElementById("btn-load-game-model").addEventListener("click", () => {
+  const sel = document.getElementById("game-model-select");
+  if (sel.value) openGameModel(sel.value);
 });
 
 document.getElementById("tool-grab").addEventListener("click", () => setTool("grab"));
 document.getElementById("tool-translate").addEventListener("click", () => setTool("translate"));
 
-document.getElementById("chk-texture").addEventListener("change", (ev) => {
-  FACE_MAT.map = ev.target.checked ? DEFAULT_TEXTURE : null;
-  FACE_MAT.color.set(ev.target.checked ? 0xffffff : 0xcad0db);
-  FACE_MAT.needsUpdate = true;
+document.getElementById("texture-select").addEventListener("change", (ev) => {
+  const t = activeTab();
+  if (t) t.textureKey = ev.target.value;
+  applyTextureKey(ev.target.value);
+  scheduleAutosave();
 });
 
 // ---------- autosave ----------
@@ -489,11 +692,21 @@ function setAutosaveStatus(msg) {
 function scheduleAutosave() {
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
-    if (!model) return;
+    if (tabs.length === 0) return;
     try {
-      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(model));
-      const t = new Date();
-      setAutosaveStatus("saved " + t.toTimeString().slice(0, 8));
+      const payload = {
+        version: 2,
+        activeId: activeTabId,
+        tabs: tabs.map(t => ({
+          id: t.id,
+          name: t.name,
+          textureKey: t.textureKey || "default",
+          model: t.model,
+        })),
+      };
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+      const d = new Date();
+      setAutosaveStatus("saved " + d.toTimeString().slice(0, 8));
     } catch (err) {
       setAutosaveStatus("failed: " + err.message);
     }
@@ -503,13 +716,35 @@ function scheduleAutosave() {
 function loadAutosave() {
   try {
     const raw = localStorage.getItem(AUTOSAVE_KEY);
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    if (!Array.isArray(d.vertices) || !Array.isArray(d.triangles)) return null;
-    return d;
+    if (!raw) return false;
+    const payload = JSON.parse(raw);
+    if (payload && payload.version === 2 && Array.isArray(payload.tabs) && payload.tabs.length > 0) {
+      tabs = payload.tabs
+        .filter(t => t && t.model && Array.isArray(t.model.vertices) && Array.isArray(t.model.triangles))
+        .map(t => ({
+          id: t.id || newTabId(),
+          name: t.name || "Untitled",
+          textureKey: t.textureKey || "default",
+          model: t.model,
+        }));
+      if (tabs.length === 0) return false;
+      activeTabId = payload.activeId && tabs.find(t => t.id === payload.activeId)
+        ? payload.activeId : tabs[0].id;
+      model = tabs.find(t => t.id === activeTabId).model;
+      return true;
+    }
+    // v1 fallback: a single raw model payload.
+    if (payload && Array.isArray(payload.vertices) && Array.isArray(payload.triangles)) {
+      const t = newTab(payload.name || "Restored", payload, "default");
+      tabs = [t];
+      activeTabId = t.id;
+      model = t.model;
+      return true;
+    }
+    return false;
   } catch (err) {
     console.warn("autosave load failed", err);
-    return null;
+    return false;
   }
 }
 
@@ -528,4 +763,9 @@ function tick() {
 }
 tick();
 
-loadModel();
+// Kick off async manifest + initial-model loads in parallel; they're all
+// independent. loadInitial handles both the autosave-restore and the
+// default-character-fetch paths.
+populateTextureSelect();
+populateGameModels();
+loadInitial();

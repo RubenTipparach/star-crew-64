@@ -25,6 +25,35 @@
           color: #7a8090; background: rgba(20,22,28,0.7); padding: 6px 10px;
           border-radius: 4px; }
   input[type=file] { display: none; }
+
+  /* Tabs bar — sits under the toolbar. */
+  #tabs-bar {
+    position: absolute; top: 62px; left: 10px; right: 10px; z-index: 9;
+    display: flex; background: rgba(20, 22, 28, 0.85);
+    border: 1px solid #2a2d36; border-radius: 6px; padding: 2px;
+    overflow-x: auto;
+  }
+  #tabs-bar .tab {
+    padding: 5px 10px; cursor: pointer; background: transparent;
+    color: #aaa; border: none; border-radius: 4px;
+    font-size: 12px; display: flex; align-items: center; gap: 6px;
+    font-family: inherit; white-space: nowrap;
+  }
+  #tabs-bar .tab:hover { background: #2a2d36; color: #ddd; }
+  #tabs-bar .tab.active { background: #3b82f6; color: #fff; }
+  #tabs-bar .tab .close { color: #ccc; padding: 0 4px; border-radius: 2px; }
+  #tabs-bar .tab .close:hover { color: #fff; background: rgba(255,100,100,0.3); }
+  #tabs-bar .new-tab {
+    color: #8af; border: none; background: transparent; cursor: pointer;
+    font-size: 14px; padding: 4px 10px; font-family: inherit;
+  }
+  #tabs-bar .new-tab:hover { background: #2a2d36; }
+
+  select {
+    background: #23262f; color: #ddd; border: 1px solid #3a3e48;
+    padding: 5px 6px; border-radius: 4px; font-size: 12px;
+    font-family: inherit;
+  }
 </style>
 <script type="importmap">
 {
@@ -41,23 +70,33 @@
     <button id="tool-translate" title="Translate selected vertex (T)">Translate</button>
     <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
     <button id="btn-add-box" title="Spawn a new box (B)">+ Box</button>
-    <button id="btn-new-model" title="Start from scratch">New</button>
+    <button id="btn-new-model" title="Open a new empty tab">New tab</button>
     <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
-    <label for="file-load">Load…</label>
+    <select id="game-model-select" title="Built-in game models">
+      <option value="">(loading models…)</option>
+    </select>
+    <button id="btn-load-game-model" title="Open the selected model in a new tab">Open</button>
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <label for="file-load">Upload…</label>
     <input id="file-load" type="file" accept="application/json" />
     <button id="btn-save" title="Download JSON to your device">Save / download</button>
     <button id="btn-reset">Reset view</button>
-    <label title="Toggle default grid texture on faces">
-      <input type="checkbox" id="chk-texture" checked style="vertical-align: middle;"> Texture
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <label title="Face texture">Tex
+      <select id="texture-select" style="margin-left: 4px;">
+        <option value="default">Default grid</option>
+        <option value="none">None</option>
+      </select>
     </label>
     <span id="info">no selection</span>
     <span id="autosave-status" style="margin-left: 12px; font-size: 11px; color: #6a7a6a;">autosave: idle</span>
   </div>
+  <div id="tabs-bar"></div>
   <div id="viewport"></div>
   <div id="hint">
     Grab: click a vertex to select. Translate: drag the gizmo (snaps to 0.1).
     Keys: G = grab, T = translate, B = spawn box, Esc = deselect.
-    Right-drag to orbit, scroll to zoom. Changes autosave in this browser.
+    Right-drag to orbit, scroll to zoom. Double-click a tab to rename.
   </div>
   <script type="module" src="./editor.js"></script>
 </body>
