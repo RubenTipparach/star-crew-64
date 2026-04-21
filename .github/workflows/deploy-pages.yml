@@ -178,8 +178,10 @@ jobs:
         #   _site/assets/               models + textures (fetched by editors)
         #   _site/rom.z64               game ROM (emulator auto-loads /rom.z64)
         #
-        # The emulator's index.html auto-loads /rom.z64 on boot via an
-        # absolute path, so the ROM still lives at the site root.
+        # The emulator's index.html auto-loads /rom.z64 by default; we patch
+        # it to fetch /star-crew-64.z64 so the ROM keeps the same name end
+        # to end (matches the local build output + the committed artifact
+        # in the repo; see .gitignore's !star-crew-64.z64 exception).
         # mobile-debug.js is injected into the emulator page only, where
         # users on phones (no devtools) can see autoload log + JS errors.
         run: |
@@ -201,8 +203,11 @@ jobs:
           # Built-in levels the level editor can open directly from the app.
           mkdir -p _site/levels
           cp -r levels/.                           _site/levels/
-          # ROM at site root so the emulator's `/rom.z64` fetch resolves.
-          cp artifacts/rom/star-crew-64.z64        _site/rom.z64
+          # ROM at site root under its real build name so the emulator's
+          # patched fetch resolves.
+          cp artifacts/rom/star-crew-64.z64        _site/star-crew-64.z64
+          # Point the emulator's auto-load at the canonical ROM name.
+          sed -i 's|/rom\.z64|/star-crew-64.z64|g; s|"rom\.z64"|"star-crew-64.z64"|g' _site/emulator/index.html
           # Inject the debug overlay script just before </body> of the emulator.
           sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/emulator/index.html
           ls -la _site/
