@@ -204,9 +204,91 @@ function buildUVs(positions) {
   return uv;
 }
 
+// Game-default UVs for a standard 12-triangle box whose 8 vertices are in the
+// order used by tools/gen-character.py / src/character.c:
+//   v0 (xmin,ymin,zmin) v1 (xmax,ymin,zmin)
+//   v2 (xmax,ymin,zmax) v3 (xmin,ymin,zmax)
+//   v4 (xmin,ymax,zmin) v5 (xmax,ymax,zmin)
+//   v6 (xmax,ymax,zmax) v7 (xmin,ymax,zmax)
+// Each face samples u∈[0,1] and v∈[v0,v1] (the character atlas uses
+// horizontal bands per body part, so v0/v1 carves out the part's band).
+// The per-corner assignment mirrors build_part() in src/character.c so
+// edits in the web editor round-trip to the N64 build.
+// Returns an array of 36 [u,v] pairs (12 triangles × 3 corners).
+function boxFaceUVs(vMin, vMax) {
+  const u0 = 0, u1 = 1, v0 = vMin, v1 = vMax;
+  return [
+    // bottom (-Y) — [0,2,1] then [0,3,2]
+    [u0, v1], [u1, v0], [u1, v1],
+    [u0, v1], [u0, v0], [u1, v0],
+    // top (+Y) — [4,5,6] then [4,6,7]
+    [u0, v0], [u1, v0], [u1, v1],
+    [u0, v0], [u1, v1], [u0, v1],
+    // back (-Z) — [0,1,5] then [0,5,4]
+    [u1, v1], [u0, v1], [u0, v0],
+    [u1, v1], [u0, v0], [u1, v0],
+    // front (+Z) — [3,6,2] then [3,7,6]
+    [u0, v1], [u1, v0], [u1, v1],
+    [u0, v1], [u0, v0], [u1, v0],
+    // left (-X) — [0,4,7] then [0,7,3]
+    [u0, v1], [u0, v0], [u1, v0],
+    [u0, v1], [u1, v0], [u1, v1],
+    // right (+X) — [1,2,6] then [1,6,5]
+    [u1, v1], [u0, v1], [u0, v0],
+    [u1, v1], [u0, v0], [u1, v0],
+  ];
+}
+
+// Triangle index pattern for a standard box (offsets from the part's vStart).
+const BOX_TRI_PATTERN = [
+  [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+  [0, 1, 5], [0, 5, 4], [3, 6, 2], [3, 7, 6],
+  [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
+];
+
+// If every triangle in `model` belongs to a standard 8-vertex / 12-triangle
+// box part matching the game's winding, return a Float32Array of matching
+// UVs. Otherwise return null so the caller can fall back.
+function buildBoxPartUVs(model) {
+  const parts = Array.isArray(model.parts) ? model.parts : null;
+  if (!parts || parts.length === 0) return null;
+  // The JSON parts list is vertex-oriented. Each part starts at vertex_start
+  // and owns 12 consecutive triangles in the order above.
+  // Verify every triangle is covered exactly once.
+  const expectedTris = parts.length * 12;
+  if (model.triangles.length !== expectedTris) return null;
+
+  const uv = new Float32Array(expectedTris * 3 * 2);
+  let cornerIdx = 0;
+  for (let pi = 0; pi < parts.length; pi++) {
+    const part = parts[pi];
+    if (!part || part.vertex_count !== 8) return null;
+    const vStart = part.vertex_start;
+    // Check triangle order matches the pattern for this part.
+    for (let t = 0; t < 12; t++) {
+      const tri = model.triangles[pi * 12 + t];
+      const pat = BOX_TRI_PATTERN[t];
+      if (!tri || tri[0] !== vStart + pat[0] ||
+          tri[1] !== vStart + pat[1] || tri[2] !== vStart + pat[2]) {
+        return null;
+      }
+    }
+    // Default band: full [0,1] unless the part declares its own v range.
+    const vMin = typeof part.uv_v_min === "number" ? part.uv_v_min : 0;
+    const vMax = typeof part.uv_v_max === "number" ? part.uv_v_max : 1;
+    const partUVs = boxFaceUVs(vMin, vMax);
+    for (const pair of partUVs) {
+      uv[cornerIdx * 2    ] = pair[0];
+      uv[cornerIdx * 2 + 1] = pair[1];
+      cornerIdx++;
+    }
+  }
+  return uv;
+}
+
 // Return a Float32Array of UVs sized triangles.length*3*2. If the model
 // already carries a hand-edited `uvs` array, use that verbatim; otherwise
-// fall back to the planar projection above.
+// try the part-aware box fallback, and finally fall back to planar.
 function getUVsFor(model, positions) {
   const n = model.triangles.length * 3;
   if (Array.isArray(model.uvs) && model.uvs.length >= n) {
@@ -218,6 +300,12 @@ function getUVsFor(model, positions) {
     }
     return uv;
   }
+  // Fallback that matches the game: if this model is structured as parts
+  // where each part is an 8-vertex / 12-triangle box written in the same
+  // order as tools/gen-character.py (and src/character.c's build_part),
+  // assign full-band UVs per face. Every face gets u∈[0,1] and v∈[0,1].
+  const partUVs = buildBoxPartUVs(model);
+  if (partUVs) return partUVs;
   return buildUVs(positions);
 }
 
@@ -410,13 +498,15 @@ window.addEventListener("keydown", (ev) => {
 
 // ---------- box spawning ----------
 // Append a 0.2-unit cube; offset so repeated spawns don't stack. Registered
-// as its own "part" entry so the N64 build can draw it independently.
+// as its own "part" entry — 8 vertices + 12 triangles in the same order the
+// game's build_part() walks (see src/character.c), so the default UVs drop
+// the full texture onto each face with no post-processing on load.
 function addBox() {
   if (!model) return;
   const vStart = model.vertices.length;
   const s = 0.1;
   const parts = Array.isArray(model.parts) ? model.parts : (model.parts = []);
-  const n = parts.length; // use the part count as the deterministic offset key
+  const n = parts.length;
   const ox = Math.round((n % 4 - 1.5) * 0.3 / GRID) * GRID;
   const oz = Math.round((Math.floor(n / 4) - 1) * 0.3 / GRID) * GRID;
   const verts = [
@@ -425,28 +515,24 @@ function addBox() {
     [-s + ox, 2 * s, -s + oz], [ s + ox, 2 * s, -s + oz],
     [ s + ox, 2 * s,  s + oz], [-s + ox, 2 * s,  s + oz],
   ];
-  const tris = [
-    [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-    [0, 1, 5], [0, 5, 4], [3, 6, 2], [3, 7, 6],
-    [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
-  ];
   for (const v of verts) model.vertices.push(v);
-  for (const t of tris) model.triangles.push([t[0] + vStart, t[1] + vStart, t[2] + vStart]);
-  parts.push({ name: `box_${n + 1}`, vertex_start: vStart, vertex_count: 8 });
-  // If the model already carries authored UVs, keep them in sync by
-  // appending planar-projected UVs for the new triangles.
+  for (const pat of BOX_TRI_PATTERN) {
+    model.triangles.push([pat[0] + vStart, pat[1] + vStart, pat[2] + vStart]);
+  }
+  parts.push({
+    name: `box_${n + 1}`,
+    vertex_start: vStart,
+    vertex_count: 8,
+    // Game default: u∈[0,1], v∈[0,1] (full texture per face). Per-part
+    // bands like the character atlas are expressed by narrowing this.
+    uv_v_min: 0,
+    uv_v_max: 1,
+  });
+  // If the model already carries authored UVs, append game-style UVs so
+  // the whole uvs array stays well-formed.
   if (Array.isArray(model.uvs)) {
-    const extraPos = new Float32Array(tris.length * 3 * 3);
-    let p = 0;
-    for (const t of tris) {
-      for (const idx of t) {
-        const v = verts[idx];
-        extraPos[p++] = v[0]; extraPos[p++] = v[1]; extraPos[p++] = v[2];
-      }
-    }
-    const extraUV = buildUVs(extraPos);
-    for (let i = 0; i < extraUV.length; i += 2) {
-      model.uvs.push([+extraUV[i].toFixed(4), +extraUV[i + 1].toFixed(4)]);
+    for (const pair of boxFaceUVs(0, 1)) {
+      model.uvs.push([pair[0], pair[1]]);
     }
   }
   buildMesh();
