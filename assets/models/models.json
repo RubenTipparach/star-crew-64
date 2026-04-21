@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "name": "character",
+      "source": "character.json",
+      "texture": "character",
+      "description": "Default crew member."
+    }
+  ]
+}

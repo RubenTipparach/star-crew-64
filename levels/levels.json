@@ -5,6 +5,10 @@
     "starting": {
       "source": "starting.json",
       "description": "Default spawn ship: bridge, quarters, mess, engines, airlock."
+    },
+    "test_level": {
+      "source": "test_level.json",
+      "description": "Generator test output — larger 60×40 layout."
     }
   }
 }

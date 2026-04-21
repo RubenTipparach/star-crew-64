@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "textures": [
+    { "name": "character",    "source": "character.png" },
+    { "name": "room",         "source": "room.png" },
+    { "name": "room_wall",    "source": "room_wall.png" },
+    { "name": "hallway",      "source": "hallway.png" },
+    { "name": "hallway_wall", "source": "hallway_wall.png" },
+    { "name": "airlock",      "source": "airlock.png" }
+  ]
+}

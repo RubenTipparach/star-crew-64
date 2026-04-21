@@ -198,6 +198,9 @@ jobs:
           cp -r tools/.                            _site/tools/
           # Assets the editors fetch (e.g. default character model, textures).
           cp -r assets/.                           _site/assets/
+          # Built-in levels the level editor can open directly from the app.
+          mkdir -p _site/levels
+          cp -r levels/.                           _site/levels/
           # ROM at site root so the emulator's `/rom.z64` fetch resolves.
           cp artifacts/rom/star-crew-64.z64        _site/rom.z64
           # Inject the debug overlay script just before </body> of the emulator.
