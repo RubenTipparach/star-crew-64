@@ -2,10 +2,10 @@
 build/
 filesystem/
 *.z64
-# Exception: the emulator page auto-loads /rom.z64 at boot, so we commit a
-# prebuilt copy for the static site + local editor preview. All other
-# .z64 outputs (e.g. star-crew-64.z64 from ./build-run) stay ignored.
-!rom.z64
+# Exception: commit the built game ROM so the emulator page has something
+# to load on start (the Pages workflow renames this to rom.z64 at deploy
+# time). All other .z64 files stay ignored.
+!star-crew-64.z64
 *.elf
 *.o
 *.d
