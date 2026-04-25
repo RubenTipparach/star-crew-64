@@ -18,6 +18,18 @@
 #define SHIP_VIEW_STAR_COUNT  24
 #define SHIP_VIEW_STAR_TYPES   4
 
+// Projectile pool size. Each projectile is a tiny unlit yellow cube emitted
+// from the ship's nose by the weapons console. Lifetime + speed below.
+#define SHIP_VIEW_PROJECTILES  6
+#define SHIP_VIEW_PROJ_LIFETIME 90       // ~1.5s @ 60Hz
+#define SHIP_VIEW_PROJ_SPEED    3.0f     // world units / frame
+
+typedef struct {
+    float    x, y, z;
+    float    vx, vy, vz;
+    int      timer;        // remaining frames; <=0 means inactive
+} ShipProjectile;
+
 typedef struct {
     T3DViewport    viewport;       // its own viewport, sub-region of the framebuffer
     T3DVertPacked *verts;          // SHIP_NUM_TRIS * 2 packed structs
@@ -44,6 +56,12 @@ typedef struct {
     // is float so we can sample fractional times for smooth playback.
     float          anim_frame;
     bool           pilot_active;   // mirrored from BridgePanel.player_active each frame
+
+    // Projectile pool (fired by the weapons console). Inactive entries have
+    // timer <= 0; we scan linearly for a free slot on spawn.
+    ShipProjectile projectiles[SHIP_VIEW_PROJECTILES];
+    T3DVertPacked *proj_mesh;            // small textureless cube, shared
+    T3DMat4FP     *proj_matrices;        // FB_COUNT * SHIP_VIEW_PROJECTILES
 } ShipView;
 
 ShipView* ship_view_create(void);
@@ -53,6 +71,10 @@ ShipView* ship_view_create(void);
 // steer/impulse are ignored and the baked idle clip drives the motion.
 void ship_view_update(ShipView *sv, int frameIdx,
                       bool pilot_active, float steer, float impulse);
+
+// Spawn a projectile from the ship's nose, traveling along the ship's
+// current forward direction. No-op if the pool is full.
+void ship_view_fire(ShipView *sv);
 
 // Draw the ship + starfield into the corner of the current framebuffer. Must
 // be called *after* the main scene has been rendered for this frame; this

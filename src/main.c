@@ -11,6 +11,7 @@
 #include "level.h"
 #include "lighting.h"
 #include "bridge_panel.h"
+#include "weapons_console.h"
 #include "ship_view.h"
 #include "stars.h"
 
@@ -46,6 +47,12 @@
 #define PANEL_WORLD_Z   (10.0f)
 #define PANEL_FACING    (3.1415927f * 0.5f)   // face +X (away from the wall)
 
+// Weapons console: same room, opposite side. Far enough from the bridge
+// panel that the player can only be in one's interaction radius at a time.
+#define WEAPONS_WORLD_X (-180.0f)
+#define WEAPONS_WORLD_Z (-30.0f)
+#define WEAPONS_FACING  (3.1415927f * 0.5f)
+
 int main(void)
 {
     debug_init_isviewer();
@@ -65,6 +72,8 @@ int main(void)
     Level *level = level_load(STARTING_LEVEL_PATH);
     Character *hero = character_create();
     BridgePanel *panel = bridge_panel_create(PANEL_WORLD_X, PANEL_WORLD_Z, PANEL_FACING);
+    WeaponsConsole *weapons = weapons_console_create(
+        WEAPONS_WORLD_X, WEAPONS_WORLD_Z, WEAPONS_FACING);
     ShipView *ship = ship_view_create();
     Stars *stars = stars_create();
 
@@ -101,6 +110,18 @@ int main(void)
         // (player is steering the ship rather than walking around).
         bool piloting = bridge_panel_update(panel,
             hero->position.v[0], hero->position.v[2], inputs);
+
+        // Weapons console: independent of bridge panel. While in range,
+        // a B press fires a projectile from the ship in the corner
+        // viewport. The console suppresses input by occupying B for the
+        // gunner, so we only let the bridge panel see B when the player
+        // ISN'T at the gunner station (handled implicitly via separate
+        // interaction radii — they're physically apart).
+        weapons_console_update(weapons,
+            hero->position.v[0], hero->position.v[2], inputs);
+        if (weapons_console_consume_fire(weapons)) {
+            ship_view_fire(ship);
+        }
 
         float speed = 0.0f;
         if (!piloting) {
@@ -164,6 +185,7 @@ int main(void)
         stars_draw(stars);
         level_draw(level);
         bridge_panel_draw(panel);
+        weapons_console_draw(weapons);
         character_draw(hero, frameIdx);
 
         // Corner-viewport "tactical view" of the ship in space. Drawn last so
@@ -178,6 +200,8 @@ int main(void)
             rdpq_text_print(NULL, 1, 80, 220,
                             piloting ? "[A] LEAVE HELM   [B] IMPULSE"
                                      : "[A] TAKE THE HELM");
+        } else if (weapons->player_in_range) {
+            rdpq_text_print(NULL, 1, 80, 220, "[B] FIRE");
         }
 
         rdpq_detach_show();

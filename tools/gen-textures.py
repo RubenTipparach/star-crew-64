@@ -291,6 +291,92 @@ def make_bridge_panel() -> list[tuple[int, int, int, int]]:
     return px
 
 
+def make_weapons_panel() -> list[tuple[int, int, int, int]]:
+    """
+    Weapons console atlas (32x32). Same band layout as bridge_panel.png so the
+    weapons-panel mesh can use the identical UV scheme:
+      band 0 (y  0- 7): targeting display — red CRT with crosshair + scanline
+      band 1 (y  8-15): trigger buttons — red caps with bezels
+      band 2 (y 16-23): metal console body — gun-metal grey w/ angled trim
+      band 3 (y 24-31): warning chevron strip — red/black hazard chevrons
+    Visually distinct from the bridge panel (red theme, targeting reticle)
+    so the player can tell the two consoles apart at a glance.
+    """
+    bezel    = (28, 30, 38, 255)
+    metal    = (62, 60, 64, 255)
+    metal_hl = (110, 108, 112, 255)
+    metal_dk = (38, 36, 40, 255)
+    screen   = (35, 8, 12, 255)
+    grid     = (200, 50, 50, 255)
+    glow     = (255, 200, 180, 255)
+    btn_red    = (220, 50, 40, 255)
+    btn_red_hl = (255, 130, 100, 255)
+    btn_dk     = (140, 25, 20, 255)
+    chev_red   = (210, 40, 35, 255)
+    chev_dk    = (40, 8, 8, 255)
+
+    px = [metal] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if y < 8:
+                # Targeting display: dark-red base with grid + a centered
+                # crosshair so it visually reads as "weapons targeting".
+                c = screen
+                if x % 4 == 0 or (y % 4 == 0):
+                    c = grid
+                # Cross-hair: center column + center row.
+                if x in (15, 16):
+                    c = glow
+                if y in (3, 4):
+                    c = glow
+                # Border bezel.
+                if x < 1 or x > 30 or y == 0 or y == 7:
+                    c = bezel
+            elif y < 16:
+                # Trigger button row: 4 large red caps across.
+                cell = x // 8
+                inset_x = x % 8
+                inset_y = (y - 8)
+                if inset_x == 0 or inset_x == 7 or inset_y == 0 or inset_y == 7:
+                    c = bezel
+                else:
+                    base = btn_red
+                    hl   = btn_red_hl
+                    dk   = btn_dk
+                    if (inset_x in (1, 6)) and (inset_y in (1, 6)):
+                        c = bezel
+                    elif inset_x in (2, 3) and inset_y in (2, 3):
+                        c = hl
+                    elif (cell % 2) == 0:
+                        c = base
+                    else:
+                        c = dk
+            elif y < 24:
+                # Console body: gun-metal grey with diagonal trim + screws.
+                yb = y - 16
+                if yb == 0 or yb == 7:
+                    c = metal_dk
+                elif (x + yb) % 9 == 0:
+                    c = metal_hl
+                else:
+                    c = metal
+                if x in (3, 28) and yb in (3, 4):
+                    c = bezel
+            else:
+                # Warning chevron strip — red and black diagonal chevrons.
+                yb = y - 24
+                # Chevron pattern: triangular stripes 4 px wide.
+                if ((x + yb) // 4) % 2 == 0:
+                    c = chev_red
+                else:
+                    c = chev_dk
+                # Top/bottom seam.
+                if yb in (0, 7):
+                    c = metal_dk
+            px[y * SIZE + x] = c
+    return px
+
+
 def make_ship() -> list[tuple[int, int, int, int]]:
     """
     Ship hull atlas (32x32). Two bands:
@@ -426,6 +512,7 @@ def main() -> None:
         "room_wall.png": make_room_wall(),
         "character.png": make_character(),
         "bridge_panel.png": make_bridge_panel(),
+        "weapons_panel.png": make_weapons_panel(),
         "ship.png": make_ship(),
     }
     for name, pixels in big_outputs.items():

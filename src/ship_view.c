@@ -3,6 +3,7 @@
 
 #include "ship_view.h"
 #include "ship_idle_anim.h"
+#include "meshes.h"  // mesh_create_laser_cube + mesh_draw_cube — shared projectile mesh
 
 // Camera distance for the corner viewport. The ship is small, so we frame it
 // from above-and-behind with a moderate FOV. Values tuned by eye against the
@@ -134,6 +135,12 @@ ShipView* ship_view_create(void)
     sv->star_quad    = malloc_uncached(sizeof(T3DVertPacked) * 2);
     sv->star_matrices = malloc_uncached(sizeof(T3DMat4FP) * SHIP_VIEW_STAR_COUNT);
     sv->star_tex_idx = malloc(sizeof(uint8_t) * SHIP_VIEW_STAR_COUNT);
+    sv->proj_mesh    = mesh_create_laser_cube();   // tiny vertex-coloured cube
+    sv->proj_matrices = malloc_uncached(
+        sizeof(T3DMat4FP) * FB_COUNT * SHIP_VIEW_PROJECTILES);
+    for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
+        sv->projectiles[i].timer = 0;   // inactive
+    }
 
     build_verts(sv->verts);
     build_star_quad(sv->star_quad);
@@ -233,6 +240,42 @@ void ship_view_update(ShipView *sv, int frameIdx,
         (float[3]){pitch, sv->yaw, roll},
         (float[3]){sv->x, sv->y, sv->z}
     );
+
+    // Tick projectiles: advance position, expire when timer hits zero.
+    for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
+        ShipProjectile *p = &sv->projectiles[i];
+        if (p->timer > 0) {
+            p->x += p->vx;
+            p->y += p->vy;
+            p->z += p->vz;
+            p->timer--;
+        }
+    }
+}
+
+void ship_view_fire(ShipView *sv)
+{
+    // Find a free slot.
+    int slot = -1;
+    for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
+        if (sv->projectiles[i].timer <= 0) { slot = i; break; }
+    }
+    if (slot < 0) return;
+
+    ShipProjectile *p = &sv->projectiles[slot];
+    // Forward direction: ship's yaw determines the heading, nose at +Z.
+    float fx = sinf(sv->yaw);
+    float fz = cosf(sv->yaw);
+    // Spawn a short distance ahead of the hull so the projectile clears
+    // the model on its first frame.
+    const float NOSE_OFFSET = 12.0f;
+    p->x = sv->x + fx * NOSE_OFFSET;
+    p->y = sv->y + 1.5f;
+    p->z = sv->z + fz * NOSE_OFFSET;
+    p->vx = fx * SHIP_VIEW_PROJ_SPEED;
+    p->vy = 0.0f;
+    p->vz = fz * SHIP_VIEW_PROJ_SPEED;
+    p->timer = SHIP_VIEW_PROJ_LIFETIME;
 }
 
 void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
@@ -325,6 +368,25 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
         t3d_tri_sync();
     }
     t3d_matrix_pop(1);
+
+    // ---- Projectiles: tiny unlit yellow cubes, depth-tested.
+    rdpq_sync_pipe();
+    rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+    rdpq_set_prim_color(RGBA32(255, 230, 100, 255));
+    t3d_state_set_drawflags(T3D_FLAG_DEPTH);
+    for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
+        ShipProjectile *p = &sv->projectiles[i];
+        if (p->timer <= 0) continue;
+        int matIdx = frameIdx * SHIP_VIEW_PROJECTILES + i;
+        t3d_mat4fp_from_srt_euler(&sv->proj_matrices[matIdx],
+            (float[3]){1.0f, 1.0f, 1.0f},
+            (float[3]){0.0f, 0.0f, 0.0f},
+            (float[3]){p->x, p->y, p->z}
+        );
+        t3d_matrix_push(&sv->proj_matrices[matIdx]);
+        mesh_draw_cube(sv->proj_mesh);
+        t3d_matrix_pop(1);
+    }
 
     // Restore the main viewport + full-screen scissor for any subsequent
     // 2D overlays (e.g. the title text in main.c).
