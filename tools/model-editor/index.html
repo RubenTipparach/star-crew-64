@@ -94,7 +94,8 @@
 </head>
 <body>
   <div id="toolbar">
-    <button id="tool-grab" class="active" title="Grab / select vertex (G)">Grab</button>
+    <button id="tool-vertex" class="active" title="Select a vertex (V)">Vertex</button>
+    <button id="tool-face" title="Select a face (F)">Face</button>
     <button id="tool-translate" title="Translate selected vertex (T)">Translate</button>
     <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
     <button id="btn-add-box" title="Spawn a new box (B)">+ Box</button>
@@ -135,8 +136,9 @@
     </div>
   </div>
   <div id="hint">
-    Grab: click a vertex to select. Translate: drag the gizmo (snaps to 0.1).
-    Keys: G = grab, T = translate, B = spawn box, Esc = deselect.
+    Vertex: click to select a corner. Face: click to select a triangle — its
+    UVs highlight in the UV editor. Translate: drag the gizmo (snaps to 0.1).
+    Keys: V = vertex, F = face, T = translate, B = spawn box, U = UV editor, Esc = deselect.
     Right-drag to orbit, scroll to zoom. Double-click a tab to rename.
   </div>
   <script type="module" src="./editor.js"></script>

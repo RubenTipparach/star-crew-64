@@ -1,9 +1,16 @@
 // star-crew-64 model editor
 //
 // Tools:
-//   - Grab: click a vertex to select it
-//   - Translate: drag the gizmo (snaps to GRID = 0.1)
-//   - + Box: spawn a new 0.2-unit cube part
+//   - Vertex: click a vertex to select it
+//   - Face:   click a triangle to select it (highlights its 3 UV corners
+//             in the UV editor so you can drag them into place)
+//   - Translate: drag the gizmo to move the selected vertex (snaps to GRID = 0.1)
+//   - + Box:  spawn a new 0.2-unit cube part
+//
+// Textures use flipY = false so UV (0,0) is the image's top-left — the same
+// convention t3d / character.c samples with on the N64 build. The UV panel
+// renders in the same space, i.e. the image is drawn so its top row is at
+// the top of the canvas and a UV of (0, 0) sits in the top-left corner.
 //
 // Persistence:
 //   - Autosave to localStorage (debounced)
@@ -99,6 +106,8 @@ function buildDefaultTexture() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  // Match the N64 sampler's convention: UV (0,0) = image top-left.
+  tex.flipY = false;
   return tex;
 }
 const DEFAULT_TEXTURE = buildDefaultTexture();
@@ -142,6 +151,31 @@ const FACE_MAT = new THREE.MeshLambertMaterial({
   flatShading: true, side: THREE.DoubleSide,
 });
 const EDGE_MAT = new THREE.LineBasicMaterial({ color: 0x4b5160 });
+
+// Highlight overlay for the currently-selected face. Re-using a single
+// geometry + material avoids re-allocating on every click.
+const HIGHLIGHT_MAT = new THREE.MeshBasicMaterial({
+  color: 0x3b82f6, transparent: true, opacity: 0.45,
+  side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+});
+const HIGHLIGHT_EDGE_MAT = new THREE.LineBasicMaterial({
+  color: 0x60a5fa, depthTest: false,
+});
+const highlightGeo = new THREE.BufferGeometry();
+highlightGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+const highlightMesh = new THREE.Mesh(highlightGeo, HIGHLIGHT_MAT);
+highlightMesh.renderOrder = 999;
+highlightMesh.visible = false;
+scene.add(highlightMesh);
+const highlightEdgeGeo = new THREE.BufferGeometry();
+// 3 verts × 3 floats — LineLoop draws back to the first to close the triangle.
+highlightEdgeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(9), 3));
+const highlightEdge = new THREE.LineLoop(highlightEdgeGeo, HIGHLIGHT_EDGE_MAT);
+highlightEdge.renderOrder = 1000;
+highlightEdge.visible = false;
+scene.add(highlightEdge);
+
+let selectedFace = -1;  // triangle index, or -1
 
 // ---------- transform controls (the translate gizmo) ----------
 const tcontrol = new TransformControls(camera, renderer.domElement);
@@ -379,6 +413,11 @@ function buildMesh() {
   meshGroup.add(vertsObj);
 
   scene.add(meshGroup);
+  // A rebuild can change triangle count / indices; drop any stale highlight.
+  if (selectedFace >= (model ? model.triangles.length : 0)) {
+    selectedFace = -1;
+  }
+  refreshFaceHighlight();
   // If the UV editor is open, repaint it against the newly-built attribute.
   if (typeof drawUV === "function") drawUV();
 }
@@ -408,6 +447,9 @@ function rebuildGeometry() {
     vertsObj.setMatrixAt(selectedIndex, vertMatrix);
     vertsObj.instanceMatrix.needsUpdate = true;
   }
+  // Keep the face-highlight overlay pinned to the same triangle even while
+  // the user drags one of its vertices around in translate mode.
+  refreshFaceHighlight();
 }
 
 // ---------- selection ----------
@@ -433,22 +475,78 @@ function selectVertex(i) {
 
 function updateInfo() {
   const info = document.getElementById("info");
-  if (selectedIndex < 0 || !model) {
-    const n = model ? model.vertices.length : 0;
-    const t = model ? model.triangles.length : 0;
-    info.textContent = `no selection · ${n} verts, ${t} tris`;
-  } else {
+  if (!model) { info.textContent = "no selection"; return; }
+  const n = model.vertices.length, t = model.triangles.length;
+  if (selectedFace >= 0) {
+    const tri = model.triangles[selectedFace];
+    info.textContent = `face #${selectedFace}  verts (${tri[0]}, ${tri[1]}, ${tri[2]})`;
+  } else if (selectedIndex >= 0) {
     const v = model.vertices[selectedIndex];
     info.textContent = `vertex #${selectedIndex}  (${v[0].toFixed(2)}, ${v[1].toFixed(2)}, ${v[2].toFixed(2)})`;
+  } else {
+    info.textContent = `no selection · ${n} verts, ${t} tris`;
   }
 }
 
+// Update the two overlay meshes (fill + outline) that highlight the chosen
+// triangle in the 3D viewport. Call whenever `selectedFace` or the underlying
+// vertex positions change so the overlay tracks edits in translate mode.
+function refreshFaceHighlight() {
+  if (!model || selectedFace < 0 || selectedFace >= model.triangles.length) {
+    highlightMesh.visible = false;
+    highlightEdge.visible = false;
+    return;
+  }
+  const tri = model.triangles[selectedFace];
+  const fillAttr = highlightGeo.attributes.position;
+  const edgeAttr = highlightEdgeGeo.attributes.position;
+  // Nudge the fill slightly along the face normal so it doesn't z-fight with
+  // the underlying face.
+  const a = model.vertices[tri[0]];
+  const b = model.vertices[tri[1]];
+  const c = model.vertices[tri[2]];
+  const e1x = b[0]-a[0], e1y = b[1]-a[1], e1z = b[2]-a[2];
+  const e2x = c[0]-a[0], e2y = c[1]-a[1], e2z = c[2]-a[2];
+  let nx = e1y*e2z - e1z*e2y;
+  let ny = e1z*e2x - e1x*e2z;
+  let nz = e1x*e2y - e1y*e2x;
+  const nlen = Math.hypot(nx, ny, nz) || 1;
+  const off = 0.002;
+  nx = nx / nlen * off; ny = ny / nlen * off; nz = nz / nlen * off;
+  const pts = [a, b, c];
+  for (let i = 0; i < 3; i++) {
+    fillAttr.array[i*3  ] = pts[i][0] + nx;
+    fillAttr.array[i*3+1] = pts[i][1] + ny;
+    fillAttr.array[i*3+2] = pts[i][2] + nz;
+    edgeAttr.array[i*3  ] = pts[i][0] + nx;
+    edgeAttr.array[i*3+1] = pts[i][1] + ny;
+    edgeAttr.array[i*3+2] = pts[i][2] + nz;
+  }
+  fillAttr.needsUpdate = true;
+  edgeAttr.needsUpdate = true;
+  highlightGeo.computeBoundingSphere();
+  highlightMesh.visible = true;
+  highlightEdge.visible = true;
+}
+
+function setSelectedFace(i) {
+  selectedFace = (typeof i === "number" && i >= 0 && model && i < model.triangles.length) ? i : -1;
+  refreshFaceHighlight();
+  updateInfo();
+  if (typeof drawUV === "function") drawUV();
+}
+
 // ---------- tool modes ----------
-let currentTool = "grab";
+// "vertex"    — click a vertex to select it (was "grab")
+// "face"      — click a triangle to select it; its UV corners highlight in
+//               the UV panel so you can re-map them
+// "translate" — gizmo transforms the selected vertex
+let currentTool = "vertex";
 
 function setTool(name) {
   currentTool = name;
-  document.getElementById("tool-grab").classList.toggle("active", name === "grab");
+  document.getElementById("tool-vertex").classList.toggle("active", name === "vertex");
+  document.getElementById("tool-face").classList.toggle("active", name === "face");
   document.getElementById("tool-translate").classList.toggle("active", name === "translate");
   if (name === "translate" && selectedIndex >= 0) {
     tcontrol.attach(selectionProxy);
@@ -459,6 +557,14 @@ function setTool(name) {
     tcontrol.visible = false;
     tcontrol.enabled = false;
   }
+  // Switching away from face mode clears the face highlight; switching into
+  // face mode clears any vertex selection so the two don't fight visually.
+  if (name !== "face") {
+    setSelectedFace(-1);
+  } else {
+    selectVertex(-1);
+  }
+  updateInfo();
 }
 
 // ---------- picking ----------
@@ -468,15 +574,31 @@ const ndc = new THREE.Vector2();
 
 renderer.domElement.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0) return;         // left only
-  if (currentTool !== "grab") return;  // in translate mode, clicks drive the gizmo
+  if (currentTool === "translate") return;  // gizmo takes its own input
   if (tcontrol.dragging) return;
-  if (!vertsObj) return;
+  if (!meshGroup) return;
 
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
 
+  if (currentTool === "face") {
+    if (!faceMesh) return;
+    const hits = raycaster.intersectObject(faceMesh, false);
+    if (hits.length > 0) {
+      // Non-indexed geometry: each triangle is 3 consecutive positions, and
+      // three.js reports the face starting at `hits[0].face.a`.
+      const triIdx = Math.floor(hits[0].face.a / 3);
+      setSelectedFace(triIdx);
+    } else {
+      setSelectedFace(-1);
+    }
+    return;
+  }
+
+  // vertex mode
+  if (!vertsObj) return;
   const hits = raycaster.intersectObject(vertsObj, false);
   if (hits.length > 0) {
     selectVertex(hits[0].instanceId);
@@ -489,10 +611,15 @@ renderer.domElement.addEventListener("pointerdown", (ev) => {
 window.addEventListener("keydown", (ev) => {
   if (ev.target.tagName === "INPUT") return;
   switch (ev.key.toLowerCase()) {
-    case "g": setTool("grab"); break;
+    case "v": setTool("vertex"); break;
+    case "g": setTool("vertex"); break;  // legacy binding
+    case "f": setTool("face"); break;
     case "t": setTool("translate"); break;
     case "b": addBox(); break;
-    case "escape": selectVertex(-1); break;
+    case "escape":
+      selectVertex(-1);
+      setSelectedFace(-1);
+      break;
   }
 });
 
@@ -584,6 +711,9 @@ function getTextureByKey(key) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  // Match the game: UV (0,0) = image top-left. Without this the character
+  // atlas's bands land upside-down (skin onto legs, etc.) on the mesh.
+  tex.flipY = false;
   TEXTURE_CACHE.set(key, tex);
   return tex;
 }
@@ -687,6 +817,7 @@ function switchTab(id) {
   renderTabs();
   buildMesh();
   selectVertex(-1);
+  setSelectedFace(-1);
   scheduleAutosave();
 }
 
@@ -709,6 +840,7 @@ function closeTab(id) {
   renderTabs();
   buildMesh();
   selectVertex(-1);
+  setSelectedFace(-1);
   scheduleAutosave();
 }
 
@@ -763,9 +895,36 @@ function renderTabs() {
 }
 
 // ---------- load / save ----------
+// Fetch the shipped character model. Returns {payload, texture} on success or
+// null on failure. Separated out so both the first-run path and the
+// "ensure character tab exists" automation can share it.
+async function fetchCharacterModel() {
+  const entry = { name: "character", source: "character.json", texture: "character" };
+  try {
+    const res = await fetch(MODEL_DIR_URL + entry.source);
+    if (!res.ok) throw new Error(res.statusText);
+    const payload = await res.json();
+    if (!Array.isArray(payload.vertices) || !Array.isArray(payload.triangles)) {
+      throw new Error("missing vertices/triangles");
+    }
+    payload.name = payload.name || entry.name;
+    return { payload, texture: entry.texture };
+  } catch (err) {
+    console.warn("Could not fetch default character model:", err);
+    return null;
+  }
+}
+
 async function loadInitial() {
   // Priority: autosave (multi-tab) → default-URL fetch → empty fallback.
+  // Whatever path wins, we then make sure at least one tab holds the shipped
+  // character model — this is the "auto-load a ROM on start" automation: if
+  // the user closed the character tab or their autosave has only stray
+  // docs, re-open a fresh character so the editor always has something
+  // meaningful to show. See README § Scripts reference.
+  let restored = false;
   if (loadAutosave()) {
+    restored = true;
     const t = activeTab();
     if (t) {
       applyTextureKey(t.textureKey || "default");
@@ -774,19 +933,23 @@ async function loadInitial() {
     }
     renderTabs();
     setAutosaveStatus("restored");
-    return;
   }
-  try {
-    const res = await fetch(MODEL_DIR_URL + "character.json");
-    if (!res.ok) throw new Error(res.statusText);
-    const payload = await res.json();
-    addTab(newTab(payload.name || "character", payload, "character"));
-    setAutosaveStatus("idle");
-  } catch (err) {
-    console.warn("Could not fetch default model:", err);
-    addTab(newTab("Untitled", emptyModel("Untitled"), "default"));
-    addBox();
-    setAutosaveStatus("idle (new)");
+
+  const alreadyHasCharacter = tabs.some(t =>
+    t && t.model && (t.model.name === "character" || t.name === "character"));
+
+  if (!alreadyHasCharacter) {
+    const fetched = await fetchCharacterModel();
+    if (fetched) {
+      addTab(newTab(fetched.payload.name || "character", fetched.payload, fetched.texture));
+      setAutosaveStatus(restored ? "restored + character loaded" : "idle");
+    } else if (!restored) {
+      // Couldn't reach the manifest (offline / served from a weird root);
+      // spawn something usable instead of leaving the page blank.
+      addTab(newTab("Untitled", emptyModel("Untitled"), "default"));
+      addBox();
+      setAutosaveStatus("idle (new)");
+    }
   }
 }
 
@@ -843,7 +1006,8 @@ document.getElementById("btn-load-game-model").addEventListener("click", () => {
   if (sel.value) openGameModel(sel.value);
 });
 
-document.getElementById("tool-grab").addEventListener("click", () => setTool("grab"));
+document.getElementById("tool-vertex").addEventListener("click", () => setTool("vertex"));
+document.getElementById("tool-face").addEventListener("click", () => setTool("face"));
 document.getElementById("tool-translate").addEventListener("click", () => setTool("translate"));
 
 document.getElementById("texture-select").addEventListener("change", (ev) => {
@@ -942,14 +1106,15 @@ function toggleUVPanel(force) {
   if (next) drawUV();
 }
 
-// UV → canvas coordinates. v is flipped because three.js UV origin is
-// bottom-left but 2D canvas origin is top-left.
+// UV → canvas coordinates. We draw the texture image with its top row at
+// canvas y=0 and use the flipY=false texture convention (UV (0,0) = image
+// top-left), so v maps straight to canvas y without flipping.
 const UV_CANVAS_SIZE = 320;
 function uvToCanvas(u, v) {
-  return { x: u * UV_CANVAS_SIZE, y: (1 - v) * UV_CANVAS_SIZE };
+  return { x: u * UV_CANVAS_SIZE, y: v * UV_CANVAS_SIZE };
 }
 function canvasToUV(x, y) {
-  return { u: x / UV_CANVAS_SIZE, v: 1 - y / UV_CANVAS_SIZE };
+  return { u: x / UV_CANVAS_SIZE, v: y / UV_CANVAS_SIZE };
 }
 function snapUV(u, v) {
   const w = Math.max(1, currentTexSize.w | 0);
@@ -1016,11 +1181,13 @@ function drawUV() {
   const get = readCurrentUVs();
   if (!model || !get) return;
 
-  // UV triangles
+  // UV triangles. Draw all non-selected first, then paint the selected face
+  // on top with a brighter fill so it can't be obscured by adjacent edges.
+  const triCount = model.triangles.length;
   uvCtx.strokeStyle = "rgba(255,255,255,0.45)";
   uvCtx.lineWidth = 1;
-  const triCount = model.triangles.length;
   for (let t = 0; t < triCount; t++) {
+    if (t === selectedFace) continue;
     const a = get(t * 3), b = get(t * 3 + 1), c = get(t * 3 + 2);
     if (!a || !b || !c) continue;
     const A = uvToCanvas(a[0], a[1]);
@@ -1033,30 +1200,69 @@ function drawUV() {
     uvCtx.closePath();
     uvCtx.stroke();
   }
+  if (selectedFace >= 0 && selectedFace < triCount) {
+    const a = get(selectedFace * 3);
+    const b = get(selectedFace * 3 + 1);
+    const c = get(selectedFace * 3 + 2);
+    if (a && b && c) {
+      const A = uvToCanvas(a[0], a[1]);
+      const B = uvToCanvas(b[0], b[1]);
+      const C = uvToCanvas(c[0], c[1]);
+      uvCtx.beginPath();
+      uvCtx.moveTo(A.x, A.y);
+      uvCtx.lineTo(B.x, B.y);
+      uvCtx.lineTo(C.x, C.y);
+      uvCtx.closePath();
+      uvCtx.fillStyle = "rgba(59,130,246,0.25)";
+      uvCtx.fill();
+      uvCtx.strokeStyle = "#60a5fa";
+      uvCtx.lineWidth = 2;
+      uvCtx.stroke();
+      uvCtx.lineWidth = 1;
+    }
+  }
 
-  // UV points
+  // UV points. Corners of the selected face use a different color so the
+  // user can tell which three to drag.
   for (let i = 0; i < triCount * 3; i++) {
     const uv = get(i);
     if (!uv) continue;
     const P = uvToCanvas(uv[0], uv[1]);
-    const selected = i === uvSelected;
-    uvCtx.fillStyle = selected ? "#3b82f6" : "#f5c451";
+    const selectedPt = i === uvSelected;
+    const inFace = selectedFace >= 0 && Math.floor(i / 3) === selectedFace;
+    uvCtx.fillStyle = selectedPt ? "#3b82f6" : inFace ? "#60a5fa" : "#f5c451";
     uvCtx.strokeStyle = "rgba(0,0,0,0.7)";
     uvCtx.lineWidth = 1;
     uvCtx.beginPath();
-    uvCtx.arc(P.x, P.y, selected ? 5 : 3, 0, Math.PI * 2);
+    uvCtx.arc(P.x, P.y, selectedPt ? 5 : inFace ? 4 : 3, 0, Math.PI * 2);
     uvCtx.fill();
     uvCtx.stroke();
   }
 }
 
 // Nearest-UV picker. Returns the corner index, or -1 if nothing within
-// UV_PICK_RADIUS canvas pixels of (x,y).
+// UV_PICK_RADIUS canvas pixels of (x,y). When a face is selected its 3
+// corners are checked first with a looser radius so they're easier to grab
+// even when they stack with corners from neighbouring faces.
 const UV_PICK_RADIUS = 10;
+const UV_PICK_RADIUS_FACE = 16;
 function pickUVAt(x, y) {
   if (!model) return -1;
   const get = readCurrentUVs();
   if (!get) return -1;
+  if (selectedFace >= 0 && selectedFace < model.triangles.length) {
+    let best = -1, bestDist = UV_PICK_RADIUS_FACE * UV_PICK_RADIUS_FACE;
+    for (let k = 0; k < 3; k++) {
+      const i = selectedFace * 3 + k;
+      const uv = get(i);
+      if (!uv) continue;
+      const P = uvToCanvas(uv[0], uv[1]);
+      const dx = P.x - x, dy = P.y - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    if (best >= 0) return best;
+  }
   let best = -1, bestDist = UV_PICK_RADIUS * UV_PICK_RADIUS;
   for (let i = 0; i < model.triangles.length * 3; i++) {
     const uv = get(i);
@@ -1104,6 +1310,10 @@ uvCanvas.addEventListener("pointerdown", (ev) => {
   if (hit >= 0) {
     uvDragging = true;
     uvCanvas.setPointerCapture(ev.pointerId);
+    // Echo the face selection into the 3D view so the user can see which
+    // triangle they're editing UVs for.
+    const faceIdx = Math.floor(hit / 3);
+    if (faceIdx !== selectedFace) setSelectedFace(faceIdx);
     const { u, v } = canvasToUV(x, y);
     commitUVEdit(hit, u, v);
   } else {
