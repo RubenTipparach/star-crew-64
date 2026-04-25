@@ -96,9 +96,9 @@ jobs:
         run: emcc --version
 
       - name: Prepare emulator build tree
-        # Mirrors emulator/.github/workflows/deploy-pages.yml from rubens-ares:
+        # Mirrors rubens-ares/.github/workflows/deploy-pages.yml from rubens-ares:
         # stage a build/ dir by copying ares/ + applying wasm-patches/ on top.
-        working-directory: emulator
+        working-directory: rubens-ares
         run: |
           set -e
           mkdir -p build
@@ -119,15 +119,15 @@ jobs:
           touch build/LICENSE
 
       - name: Build WASM
-        working-directory: emulator/build/web-ui
+        working-directory: rubens-ares/build/web-ui
         run: emmake make -j"$(nproc)" wasm32=true platform=linux
 
       - name: Verify build artifacts
         run: |
-          ls -la emulator/build/web-ui/out/
-          test -f emulator/build/web-ui/out/ares
-          test -f emulator/build/web-ui/out/ares.wasm
-          test -f emulator/build/web-ui/out/ares.data
+          ls -la rubens-ares/build/web-ui/out/
+          test -f rubens-ares/build/web-ui/out/ares
+          test -f rubens-ares/build/web-ui/out/ares.wasm
+          test -f rubens-ares/build/web-ui/out/ares.data
 
       - name: Stage emulator artifact (flat)
         # Stage into a single flat dir so the artifact layout is predictable;
@@ -135,11 +135,11 @@ jobs:
         # uploads, which makes downstream paths fragile.
         run: |
           mkdir -p emu-dist
-          cp emulator/web/index.html            emu-dist/index.html
-          cp emulator/web/coi-serviceworker.js  emu-dist/coi-serviceworker.js
-          cp emulator/build/web-ui/out/ares     emu-dist/ares.js
-          cp emulator/build/web-ui/out/ares.wasm emu-dist/ares.wasm
-          cp emulator/build/web-ui/out/ares.data emu-dist/ares.data
+          cp rubens-ares/web/index.html            emu-dist/index.html
+          cp rubens-ares/web/coi-serviceworker.js  emu-dist/coi-serviceworker.js
+          cp rubens-ares/build/web-ui/out/ares     emu-dist/ares.js
+          cp rubens-ares/build/web-ui/out/ares.wasm emu-dist/ares.wasm
+          cp rubens-ares/build/web-ui/out/ares.data emu-dist/ares.data
           ls -la emu-dist/
 
       - name: Upload emulator artifact
