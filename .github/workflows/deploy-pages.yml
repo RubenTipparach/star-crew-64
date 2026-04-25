@@ -171,23 +171,51 @@ jobs:
           path: artifacts/emu
 
       - name: Stage _site/
-        # The emulator's web/index.html auto-loads /rom.z64 on boot, so we
-        # copy the built game ROM alongside the emulator under that name.
-        # Then inject our mobile-debug.js so users on phones (no devtools)
-        # can see the autoload log + JS errors directly on the page.
+        # Layout:
+        #   _site/index.html            menu page (web-overlay/index.html)
+        #   _site/emulator/             rubens-ares WASM build
+        #   _site/tools/                in-browser editors (level + model)
+        #   _site/assets/               models + textures (fetched by editors)
+        #   _site/rom.z64               game ROM (emulator auto-loads /rom.z64)
+        #
+        # The emulator's index.html auto-loads its ROM with a *relative*
+        # fetch ("rom.z64" / "star-crew-64.z64") so the file must live
+        # alongside the page at _site/emulator/. We patch that single
+        # fetch call and copy the build output under the same name that
+        # the repo + Makefile already use.
+        # mobile-debug.js is injected into the emulator page only, where
+        # users on phones (no devtools) can see autoload log + JS errors.
         run: |
           set -e
-          mkdir -p _site
-          cp artifacts/emu/index.html              _site/index.html
-          cp artifacts/emu/coi-serviceworker.js    _site/coi-serviceworker.js
-          cp artifacts/emu/ares.js                 _site/ares.js
-          cp artifacts/emu/ares.wasm               _site/ares.wasm
-          cp artifacts/emu/ares.data               _site/ares.data
-          cp artifacts/rom/star-crew-64.z64        _site/rom.z64
-          cp web-overlay/mobile-debug.js           _site/mobile-debug.js
-          # Inject the debug overlay script just before </body>.
-          sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/index.html
+          mkdir -p _site/emulator _site/tools _site/assets
+          # Menu at the root.
+          cp web-overlay/index.html                _site/index.html
+          # Emulator under /emulator/.
+          cp artifacts/emu/index.html              _site/emulator/index.html
+          cp artifacts/emu/coi-serviceworker.js    _site/emulator/coi-serviceworker.js
+          cp artifacts/emu/ares.js                 _site/emulator/ares.js
+          cp artifacts/emu/ares.wasm               _site/emulator/ares.wasm
+          cp artifacts/emu/ares.data               _site/emulator/ares.data
+          cp web-overlay/mobile-debug.js           _site/emulator/mobile-debug.js
+          # Editors under /tools/.
+          cp -r tools/.                            _site/tools/
+          # Assets the editors fetch (e.g. default character model, textures).
+          cp -r assets/.                           _site/assets/
+          # Built-in levels the level editor can open directly from the app.
+          mkdir -p _site/levels
+          cp -r levels/.                           _site/levels/
+          # ROM sits next to the emulator page because autoLoadROM() uses a
+          # relative fetch. Keep the build-output name end to end.
+          cp artifacts/rom/star-crew-64.z64        _site/emulator/star-crew-64.z64
+          # Rewrite the single auto-load fetch; leave the emscripten
+          # in-memory path (/rom.z64 inside Module.FS) alone so the
+          # emulator's ROM-load plumbing keeps working unchanged.
+          sed -i "s|fetch('rom\\.z64')|fetch('star-crew-64.z64')|" _site/emulator/index.html
+          # Inject the debug overlay script just before </body> of the emulator.
+          sed -i 's|</body>|<script src="mobile-debug.js"></script>\n</body>|' _site/emulator/index.html
           ls -la _site/
+          ls -la _site/emulator/
+          ls -la _site/tools/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

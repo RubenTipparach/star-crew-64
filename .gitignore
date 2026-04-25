@@ -2,6 +2,10 @@
 build/
 filesystem/
 *.z64
+# Exception: commit the built game ROM so the emulator page has something
+# to load on start (the Pages workflow renames this to rom.z64 at deploy
+# time). All other .z64 files stay ignored.
+!star-crew-64.z64
 *.elf
 *.o
 *.d

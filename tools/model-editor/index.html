@@ -25,6 +25,63 @@
           color: #7a8090; background: rgba(20,22,28,0.7); padding: 6px 10px;
           border-radius: 4px; }
   input[type=file] { display: none; }
+
+  /* Tabs bar — sits under the toolbar. */
+  #tabs-bar {
+    position: absolute; top: 62px; left: 10px; right: 10px; z-index: 9;
+    display: flex; background: rgba(20, 22, 28, 0.85);
+    border: 1px solid #2a2d36; border-radius: 6px; padding: 2px;
+    overflow-x: auto;
+  }
+  #tabs-bar .tab {
+    padding: 5px 10px; cursor: pointer; background: transparent;
+    color: #aaa; border: none; border-radius: 4px;
+    font-size: 12px; display: flex; align-items: center; gap: 6px;
+    font-family: inherit; white-space: nowrap;
+  }
+  #tabs-bar .tab:hover { background: #2a2d36; color: #ddd; }
+  #tabs-bar .tab.active { background: #3b82f6; color: #fff; }
+  #tabs-bar .tab .close { color: #ccc; padding: 0 4px; border-radius: 2px; }
+  #tabs-bar .tab .close:hover { color: #fff; background: rgba(255,100,100,0.3); }
+  #tabs-bar .new-tab {
+    color: #8af; border: none; background: transparent; cursor: pointer;
+    font-size: 14px; padding: 4px 10px; font-family: inherit;
+  }
+  #tabs-bar .new-tab:hover { background: #2a2d36; }
+
+  select {
+    background: #23262f; color: #ddd; border: 1px solid #3a3e48;
+    padding: 5px 6px; border-radius: 4px; font-size: 12px;
+    font-family: inherit;
+  }
+
+  /* UV editor floating panel (bottom-right). */
+  #uv-panel {
+    position: absolute; right: 10px; bottom: 10px; z-index: 20;
+    width: 340px; background: rgba(18, 20, 26, 0.95);
+    border: 1px solid #2a2d36; border-radius: 6px;
+    display: none; flex-direction: column;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  }
+  #uv-panel.open { display: flex; }
+  #uv-panel .head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid #2a2d36;
+    font-size: 12px; color: #cfe;
+  }
+  #uv-panel .head .spacer { flex: 1; }
+  #uv-panel .head button {
+    background: #23262f; color: #ddd; border: 1px solid #3a3e48;
+    padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;
+  }
+  #uv-panel canvas {
+    display: block; background: #000;
+    width: 320px; height: 320px; margin: 10px auto; cursor: crosshair;
+  }
+  #uv-panel .foot {
+    padding: 6px 10px; border-top: 1px solid #2a2d36;
+    font-size: 11px; color: #8b94ab; display: flex; gap: 10px; flex-wrap: wrap;
+  }
 </style>
 <script type="importmap">
 {
@@ -37,19 +94,52 @@
 </head>
 <body>
   <div id="toolbar">
-    <button id="tool-grab" class="active" title="Grab / select vertex (G)">Grab</button>
+    <button id="tool-vertex" class="active" title="Select a vertex (V)">Vertex</button>
+    <button id="tool-face" title="Select a face (F)">Face</button>
     <button id="tool-translate" title="Translate selected vertex (T)">Translate</button>
     <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
-    <label for="file-load">Load…</label>
+    <button id="btn-add-box" title="Spawn a new box (B)">+ Box</button>
+    <button id="btn-new-model" title="Open a new empty tab">New tab</button>
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <select id="game-model-select" title="Built-in game models">
+      <option value="">(loading models…)</option>
+    </select>
+    <button id="btn-load-game-model" title="Open the selected model in a new tab">Open</button>
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <label for="file-load">Upload…</label>
     <input id="file-load" type="file" accept="application/json" />
-    <button id="btn-save">Save</button>
+    <button id="btn-save" title="Download JSON to your device">Save / download</button>
     <button id="btn-reset">Reset view</button>
+    <span style="width: 1px; height: 20px; background: #3a3e48;"></span>
+    <label title="Face texture">Tex
+      <select id="texture-select" style="margin-left: 4px;">
+        <option value="default">Default grid</option>
+        <option value="none">None</option>
+      </select>
+    </label>
+    <button id="btn-uv-toggle" title="Show/hide UV editor (U)">UV</button>
     <span id="info">no selection</span>
+    <span id="autosave-status" style="margin-left: 12px; font-size: 11px; color: #6a7a6a;">autosave: idle</span>
   </div>
+  <div id="tabs-bar"></div>
   <div id="viewport"></div>
+  <div id="uv-panel">
+    <div class="head">
+      <span>UV editor</span>
+      <span class="spacer"></span>
+      <button id="btn-uv-fit" title="Reset to 0–1 view">Fit</button>
+      <button id="btn-uv-close" title="Close (U)">×</button>
+    </div>
+    <canvas id="uv-canvas" width="320" height="320"></canvas>
+    <div class="foot">
+      <span id="uv-info">click a UV point · drag to move (pixel-snap)</span>
+    </div>
+  </div>
   <div id="hint">
-    Grab: click a vertex to select. Translate: drag the gizmo (snaps to 0.1).
-    Keys: G = grab, T = translate, Esc = deselect. Right-drag to orbit, scroll to zoom.
+    Vertex: click to select a corner. Face: click to select a triangle — its
+    UVs highlight in the UV editor. Translate: drag the gizmo (snaps to 0.1).
+    Keys: V = vertex, F = face, T = translate, B = spawn box, U = UV editor, Esc = deselect.
+    Right-drag to orbit, scroll to zoom. Double-click a tab to rename.
   </div>
   <script type="module" src="./editor.js"></script>
 </body>
