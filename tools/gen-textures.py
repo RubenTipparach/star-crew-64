@@ -27,15 +27,15 @@ SIZE = 32
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets", "textures")
 
 
-def write_png(path: str, pixels: list[tuple[int, int, int, int]]) -> None:
-    """Write a SIZE x SIZE RGBA PNG. pixels is a flat row-major list of RGBA."""
-    assert len(pixels) == SIZE * SIZE
+def write_png(path: str, pixels: list[tuple[int, int, int, int]], size: int = SIZE) -> None:
+    """Write a square RGBA PNG. `pixels` is a flat row-major list of length size*size."""
+    assert len(pixels) == size * size
 
     raw = bytearray()
-    for y in range(SIZE):
+    for y in range(size):
         raw.append(0)  # filter: None
-        for x in range(SIZE):
-            r, g, b, a = pixels[y * SIZE + x]
+        for x in range(size):
+            r, g, b, a = pixels[y * size + x]
             raw.extend((r & 255, g & 255, b & 255, a & 255))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -47,7 +47,7 @@ def write_png(path: str, pixels: list[tuple[int, int, int, int]]) -> None:
         )
 
     sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 6, 0, 0, 0)  # 8-bit RGBA
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)  # 8-bit RGBA
     idat = zlib.compress(bytes(raw), 9)
 
     with open(path, "wb") as f:
@@ -413,9 +413,48 @@ def make_character() -> list[tuple[int, int, int, int]]:
     return px
 
 
+STAR_SIZE = 8  # small billboards
+
+
+def _make_star_sprite(core, halo) -> list[tuple[int, int, int, int]]:
+    """
+    8×8 star billboard: a single bright core at (3,3) with a soft 4-neighbour
+    halo, everything else transparent-looking (black with alpha=0). Combining
+    multiple scattered star quads in 3D gives the background its twinkle.
+    """
+    bg = (0, 0, 0, 0)  # zero alpha so the dark corners don't punch a hole
+    px = [bg] * (STAR_SIZE * STAR_SIZE)
+    cx, cy = 3, 3
+
+    px[cy * STAR_SIZE + cx] = core
+    # Plus-shaped halo; corners stay transparent so the sprite reads as round.
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        x, y = cx + dx, cy + dy
+        if 0 <= x < STAR_SIZE and 0 <= y < STAR_SIZE:
+            px[y * STAR_SIZE + x] = halo
+    return px
+
+
+def make_star_white():
+    return _make_star_sprite(core=(255, 255, 250, 255), halo=(160, 160, 180, 255))
+
+
+def make_star_blue():
+    return _make_star_sprite(core=(180, 210, 255, 255), halo=(70, 110, 200, 255))
+
+
+def make_star_yellow():
+    return _make_star_sprite(core=(255, 230, 140, 255), halo=(190, 150,  60, 255))
+
+
+def make_star_red():
+    return _make_star_sprite(core=(255, 140, 120, 255), halo=(170,  60,  50, 255))
+
+
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
-    outputs = {
+    # 32×32 level/character textures.
+    big_outputs = {
         "hallway.png": make_hallway(),
         "room.png": make_room(),
         "airlock.png": make_airlock(),
@@ -426,10 +465,29 @@ def main() -> None:
         "ship.png": make_ship(),
         "starfield.png": make_starfield(),
     }
-    for name, pixels in outputs.items():
+    for name, pixels in big_outputs.items():
         path = os.path.join(OUT, name)
-        write_png(path, pixels)
+        write_png(path, pixels, SIZE)
         print(f"  wrote {path}")
+
+    # 8×8 billboard star sprites.
+    small_outputs = {
+        "star_white.png":  make_star_white(),
+        "star_blue.png":   make_star_blue(),
+        "star_yellow.png": make_star_yellow(),
+        "star_red.png":    make_star_red(),
+    }
+    for name, pixels in small_outputs.items():
+        path = os.path.join(OUT, name)
+        write_png(path, pixels, STAR_SIZE)
+        print(f"  wrote {path}")
+
+    # Clean up the old 32×32 starfield texture if it's still sitting around —
+    # we replaced it with the four 8×8 billboard sprites above.
+    stale = os.path.join(OUT, "stars.png")
+    if os.path.exists(stale):
+        os.remove(stale)
+        print(f"  removed {stale}")
 
 
 if __name__ == "__main__":
