@@ -200,6 +200,184 @@ def make_room_wall() -> list[tuple[int, int, int, int]]:
     return px
 
 
+def make_bridge_panel() -> list[tuple[int, int, int, int]]:
+    """
+    Bridge control panel atlas (32x32). The panel mesh samples three regions
+    of this texture to dress its different faces:
+      band 0 (y  0- 7): glowing main display — green grid + scanline
+      band 1 (y  8-15): button rows — red/yellow/green caps with bezels
+      band 2 (y 16-23): metal console body — dark brushed steel + seams
+      band 3 (y 24-31): impulse throttle slot — dark groove + amber edge
+    """
+    bezel    = (28, 30, 38, 255)
+    metal    = (62, 66, 78, 255)
+    metal_hl = (110, 118, 132, 255)
+    metal_dk = (38, 42, 50, 255)
+    screen   = (12, 35, 22, 255)
+    grid     = (40, 180, 110, 255)
+    glow     = (160, 240, 200, 255)
+    btn_red    = (220, 60, 50, 255)
+    btn_red_hl = (255, 130, 110, 255)
+    btn_yel    = (240, 200, 60, 255)
+    btn_yel_hl = (255, 235, 130, 255)
+    btn_grn    = (60, 200, 110, 255)
+    btn_grn_hl = (140, 240, 170, 255)
+    amber      = (230, 165, 50, 255)
+    amber_dk   = (130, 90, 30, 255)
+
+    px = [metal] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if y < 8:
+                # Main display: dark green base with grid lines + horizontal scanlines.
+                c = screen
+                if x % 4 == 0 or (y % 4 == 0):
+                    c = grid
+                if y == 3 and 4 <= x <= 27:
+                    c = glow  # readout highlight line
+                if x < 1 or x > 30 or y == 0 or y == 7:
+                    c = bezel
+            elif y < 16:
+                # Button row: 4 large round-ish caps across, bezel between them.
+                cell = x // 8
+                inset_x = x % 8
+                inset_y = (y - 8)
+                # bezel between cells (x % 8 == 0 or 7) and at top/bottom of band
+                if inset_x == 0 or inset_x == 7 or inset_y == 0 or inset_y == 7:
+                    c = bezel
+                else:
+                    base, hl = [
+                        (btn_red, btn_red_hl),
+                        (btn_yel, btn_yel_hl),
+                        (btn_grn, btn_grn_hl),
+                        (btn_red, btn_red_hl),
+                    ][cell % 4]
+                    # round-ish: corners get bezel
+                    if (inset_x in (1, 6)) and (inset_y in (1, 6)):
+                        c = bezel
+                    elif inset_x in (2, 3) and inset_y in (2, 3):
+                        c = hl
+                    else:
+                        c = base
+            elif y < 24:
+                # Console body: brushed metal w/ horizontal seam at top + bottom.
+                yb = y - 16
+                if yb == 0 or yb == 7:
+                    c = metal_dk
+                elif (x * 3 + yb) % 11 == 0:
+                    c = metal_hl
+                else:
+                    c = metal
+                # vertical screw heads
+                if x in (3, 28) and yb in (3, 4):
+                    c = bezel
+            else:
+                # Throttle slot: dark recess with amber illuminated edges.
+                yb = y - 24
+                slot_top = 1
+                slot_bot = 6
+                if yb in (slot_top, slot_bot):
+                    c = amber
+                elif slot_top < yb < slot_bot:
+                    if x in (1, 30):
+                        c = amber_dk
+                    elif (x % 4) == 0:
+                        c = amber_dk
+                    else:
+                        c = bezel
+                else:
+                    c = metal_dk
+            px[y * SIZE + x] = c
+    return px
+
+
+def make_ship() -> list[tuple[int, int, int, int]]:
+    """
+    Ship hull atlas (32x32). Two bands:
+      band 0 (y  0-15): top-side hull — pale grey panels + cockpit accent
+      band 1 (y 16-31): underside / engines — darker plating + amber thruster
+    The procedural ship model UVs sample whichever band matches the face.
+    """
+    hull       = (180, 188, 200, 255)
+    hull_hl    = (220, 226, 235, 255)
+    hull_dk    = (110, 118, 132, 255)
+    seam       = (60, 65, 75, 255)
+    cockpit    = (40, 110, 200, 255)
+    cockpit_hl = (130, 200, 255, 255)
+    under      = (70, 75, 88, 255)
+    under_dk   = (40, 44, 52, 255)
+    engine     = (255, 170, 60, 255)
+    engine_hl  = (255, 230, 160, 255)
+
+    px = [hull] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if y < 16:
+                c = hull
+                # plate seams
+                if x in (0, 15, 16, 31) or y in (0, 15):
+                    c = seam
+                elif (x + y) % 9 == 0:
+                    c = hull_hl
+                elif (x * 5 + y * 3) % 13 == 0:
+                    c = hull_dk
+                # cockpit dome — a small bright patch in the upper-middle
+                if 12 <= x <= 19 and 4 <= y <= 9:
+                    c = cockpit
+                    if 14 <= x <= 17 and 5 <= y <= 7:
+                        c = cockpit_hl
+            else:
+                c = under
+                yb = y - 16
+                if x in (0, 15, 16, 31) or yb in (0, 15):
+                    c = under_dk
+                elif (x * 7 + yb * 11) % 17 == 0:
+                    c = under_dk
+                # twin engine glow patches at the back
+                if (3 <= x <= 8 or 23 <= x <= 28) and 10 <= yb <= 13:
+                    c = engine
+                    if (4 <= x <= 7 or 24 <= x <= 27) and 11 <= yb <= 12:
+                        c = engine_hl
+            px[y * SIZE + x] = c
+    return px
+
+
+def make_starfield() -> list[tuple[int, int, int, int]]:
+    """
+    Background starfield (32x32). Deep navy with sparse white/blue stars at
+    deterministic positions; tiles seamlessly so the corner viewport can pan
+    it as the ship moves.
+    """
+    space    = (8, 10, 22, 255)
+    nebula   = (24, 18, 50, 255)
+    star_dim = (140, 150, 200, 255)
+    star_md  = (210, 220, 240, 255)
+    star_br  = (255, 255, 255, 255)
+
+    px = [space] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            # soft nebula bands — low-frequency ripple
+            if ((x * 3 + y * 2) // 6) % 5 == 0:
+                px[y * SIZE + x] = nebula
+    # deterministic "random" star positions via hash, ~ 30 stars
+    rng = 1234567
+    for i in range(30):
+        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
+        sx = rng % SIZE
+        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
+        sy = rng % SIZE
+        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
+        kind = rng % 10
+        if kind < 6:
+            px[sy * SIZE + sx] = star_dim
+        elif kind < 9:
+            px[sy * SIZE + sx] = star_md
+        else:
+            px[sy * SIZE + sx] = star_br
+    return px
+
+
 def make_character() -> list[tuple[int, int, int, int]]:
     """
     Character UV atlas (32x32). Laid out as 4 horizontal bands, each 32x8:
@@ -244,6 +422,9 @@ def main() -> None:
         "hallway_wall.png": make_hallway_wall(),
         "room_wall.png": make_room_wall(),
         "character.png": make_character(),
+        "bridge_panel.png": make_bridge_panel(),
+        "ship.png": make_ship(),
+        "starfield.png": make_starfield(),
     }
     for name, pixels in outputs.items():
         path = os.path.join(OUT, name)

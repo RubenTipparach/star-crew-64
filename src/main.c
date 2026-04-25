@@ -10,6 +10,8 @@
 #include "character.h"
 #include "level.h"
 #include "lighting.h"
+#include "bridge_panel.h"
+#include "ship_view.h"
 
 // Character movement speed in world units per frame (at ~60fps).
 #define MOVE_SPEED 0.6f
@@ -34,6 +36,15 @@
 #define LIGHT_HERO      3
 #define NUM_POINT_LIGHTS 4
 
+// Where to place the bridge control panel in world coords. The starting
+// level's "Bridge" room sits roughly around cell (5, 10) — see
+// levels/starting.json. With TILE_SIZE=20 and a 30x20 grid centered on the
+// origin, that cell maps to world (-195, 10), so we put the panel a couple
+// tiles in from the bridge's far wall, facing -X (toward the player).
+#define PANEL_WORLD_X   (-180.0f)
+#define PANEL_WORLD_Z   (10.0f)
+#define PANEL_FACING    (3.1415927f * 0.5f)   // face +X (away from the wall)
+
 int main(void)
 {
     debug_init_isviewer();
@@ -52,6 +63,8 @@ int main(void)
     Camera camera = camera_create();
     Level *level = level_load(STARTING_LEVEL_PATH);
     Character *hero = character_create();
+    BridgePanel *panel = bridge_panel_create(PANEL_WORLD_X, PANEL_WORLD_Z, PANEL_FACING);
+    ShipView *ship = ship_view_create();
 
     // Spawn the hero on the "spawn" entity if one was placed in the editor;
     // otherwise leave him at the world origin (which is the grid's center).
@@ -82,27 +95,36 @@ int main(void)
         joypad_poll();
         joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
 
-        // Camera sits at (+X, +Y, +Z) looking at the origin, so its forward
-        // vector projected onto XZ is (-k, -k) and its right vector is
-        // (+k, -k), where k = √2/2. Map the stick into those basis vectors so
-        // stick-up moves the hero into the scene (camera-forward) and
-        // stick-right moves along camera-right.
-        float sx = inputs.stick_x / STICK_DIVISOR;
-        float sy = inputs.stick_y / STICK_DIVISOR;   // stick up (+y) should go into the scene
-        const float k = 0.7071f;
-        float dx = (sx - sy) * k * MOVE_SPEED;   // sx·right.x + sy·forward.x
-        float dz = -(sx + sy) * k * MOVE_SPEED;  // sx·right.z + sy·forward.z
-        hero->position.v[0] += dx;
-        hero->position.v[2] += dz;
-        float speed = sqrtf(dx * dx + dz * dz);
-        if (speed > 0.01f) {
-            character_face_direction(hero, atan2f(dx, -dz), TURN_SMOOTHING);
+        // Run the panel update first so we know whether it has captured input
+        // (player is steering the ship rather than walking around).
+        bool piloting = bridge_panel_update(panel,
+            hero->position.v[0], hero->position.v[2], inputs);
+
+        float speed = 0.0f;
+        if (!piloting) {
+            // Camera sits at (+X, +Y, +Z) looking at the origin, so its forward
+            // vector projected onto XZ is (-k, -k) and its right vector is
+            // (+k, -k), where k = √2/2. Map the stick into those basis vectors
+            // so stick-up moves the hero into the scene (camera-forward) and
+            // stick-right moves along camera-right.
+            float sx = inputs.stick_x / STICK_DIVISOR;
+            float sy = inputs.stick_y / STICK_DIVISOR;
+            const float k = 0.7071f;
+            float dx = (sx - sy) * k * MOVE_SPEED;
+            float dz = -(sx + sy) * k * MOVE_SPEED;
+            hero->position.v[0] += dx;
+            hero->position.v[2] += dz;
+            speed = sqrtf(dx * dx + dz * dz);
+            if (speed > 0.01f) {
+                character_face_direction(hero, atan2f(dx, -dz), TURN_SMOOTHING);
+            }
         }
 
         character_animate(hero, speed);
         camera_set_target(&camera, hero->position.v[0], 5.0f, hero->position.v[2]);
         camera_update(&camera);
         character_update_matrix(hero, frameIdx);
+        ship_view_update(ship, frameIdx, piloting, panel->steer, panel->impulse);
 
         rdpq_attach(display_get(), display_get_zbuf());
         t3d_frame_start();
@@ -123,11 +145,22 @@ int main(void)
         lighting_finalize(totalLights);
 
         level_draw(level);
+        bridge_panel_draw(panel);
         character_draw(hero, frameIdx);
+
+        // Corner-viewport "tactical view" of the ship in space. Drawn last so
+        // it overlays the bridge interior. The function manages its own
+        // viewport / scissor and restores them before returning.
+        ship_view_draw(ship, frameIdx, &camera.viewport);
 
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
         rdpq_text_print(NULL, 1, 100, 20, "STAR CREW 64");
+        if (panel->player_in_range) {
+            rdpq_text_print(NULL, 1, 80, 220,
+                            piloting ? "[A] LEAVE HELM   [B] IMPULSE"
+                                     : "[A] TAKE THE HELM");
+        }
 
         rdpq_detach_show();
     }
