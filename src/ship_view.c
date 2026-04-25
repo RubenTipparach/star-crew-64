@@ -9,10 +9,9 @@
 // ship's WORLD_SCALE (14) in gen-ship-c.py.
 #define SV_FOV_DEG  55.0f
 #define SV_NEAR     5.0f
-#define SV_FAR      300.0f
-#define SV_CAM_OFF_X  0.0f
+#define SV_FAR      400.0f
 #define SV_CAM_OFF_Y  18.0f
-#define SV_CAM_OFF_Z  -28.0f   // behind the ship along its forward axis (-Z is behind)
+#define SV_CAM_OFF_Z  -28.0f   // behind the ship (camera sits at ship.z - this)
 
 // Pilot-driven motion tuning.
 #define SHIP_TURN_RATE   0.02f   // radians per frame at full stick
@@ -20,9 +19,18 @@
 #define SHIP_DAMP        0.985f  // friction multiplier per frame
 #define SHIP_MAX_SPEED   1.5f
 
-// Starfield backdrop quad — sized to fully cover the viewport at SV_FAR-ish
-// depth. Drawn unlit, no z-write.
-#define BG_HALF  120
+// Forward drift applied while idle so we visibly "fly through" the
+// star field (otherwise the camera stays fixed on the ship and the
+// scene reads as static).
+#define IDLE_DRIFT_VEL   0.5f    // world units / frame
+
+// Star scatter — a long box ahead of and behind the camera so stars wrap as
+// the ship drifts forward. Z range chosen so even at SV_FAR the far end is
+// inside the frustum.
+#define STAR_BOX_X_HALF   180.0f
+#define STAR_BOX_Y_HALF    90.0f
+#define STAR_BOX_Z_HALF   180.0f
+#define STAR_QUAD_HALF      4    // local-space half-extent of each star quad
 
 static ShipView sv_instance = {0};
 
@@ -60,24 +68,47 @@ static void build_verts(T3DVertPacked *out)
     }
 }
 
-// Big star backdrop quad facing +Z (camera looks down -Z toward the ship,
-// so this is *behind* the ship from the viewport camera's POV).
-static void build_bg_quad(T3DVertPacked *out)
+// Tiny horizontal star quad lying on XZ at local origin — same convention as
+// src/stars.c. Per-star matrices place each instance.
+static void build_star_quad(T3DVertPacked *out)
 {
-    const int16_t S = BG_HALF;
-    uint16_t n = t3d_vert_pack_normal(&(T3DVec3){{0, 0, 1}});
+    const int16_t H = STAR_QUAD_HALF;
+    uint16_t nUp = t3d_vert_pack_normal(&(T3DVec3){{0, 1, 0}});
     uint32_t white = 0xFFFFFFFF;
-    int16_t u0 = UV(0), v0 = UV(0);
-    int16_t u1 = UV(64), v1 = UV(64);  // 2x tile so the starfield repeats nicely
+    int16_t u0 = UV(0), v0 = UV(0), u1 = UV(8), v1 = UV(8);
 
     out[0] = (T3DVertPacked){
-        .posA = {-S, -S, 0}, .rgbaA = white, .normA = n, .stA = {u0, v1},
-        .posB = { S, -S, 0}, .rgbaB = white, .normB = n, .stB = {u1, v1},
+        .posA = {-H, 0, -H}, .rgbaA = white, .normA = nUp, .stA = {u0, v0},
+        .posB = { H, 0, -H}, .rgbaB = white, .normB = nUp, .stB = {u1, v0},
     };
     out[1] = (T3DVertPacked){
-        .posA = { S,  S, 0}, .rgbaA = white, .normA = n, .stA = {u1, v0},
-        .posB = {-S,  S, 0}, .rgbaB = white, .normB = n, .stB = {u0, v0},
+        .posA = { H, 0,  H}, .rgbaA = white, .normA = nUp, .stA = {u1, v1},
+        .posB = {-H, 0,  H}, .rgbaB = white, .normB = nUp, .stB = {u0, v1},
     };
+}
+
+// Deterministic LCG so the star pattern is reproducible (and matches across
+// builds).
+static uint32_t lcg = 0x13371337u;
+static float frand01(void)
+{
+    lcg = lcg * 1664525u + 1013904223u;
+    return (lcg >> 8) * (1.0f / 16777216.0f);
+}
+
+static void place_star(T3DMat4FP *m, float ship_z)
+{
+    // X / Y are uniform in the box centred on the ship's lateral position.
+    // Z is uniform in the box centred just AHEAD of the ship (so most stars
+    // are visible from the trailing camera).
+    float x = (frand01() * 2.0f - 1.0f) * STAR_BOX_X_HALF;
+    float y = (frand01() * 2.0f - 1.0f) * STAR_BOX_Y_HALF;
+    float z = ship_z + (frand01() * 2.0f - 1.0f) * STAR_BOX_Z_HALF;
+    t3d_mat4fp_from_srt_euler(m,
+        (float[3]){1.0f, 1.0f, 1.0f},
+        (float[3]){0.0f, 0.0f, 0.0f},
+        (float[3]){x, y, z}
+    );
 }
 
 ShipView* ship_view_create(void)
@@ -87,26 +118,39 @@ ShipView* ship_view_create(void)
     sv->yaw  = 0.0f;
     sv->x = 0.0f; sv->y = 0.0f; sv->z = 0.0f;
     sv->vel = 0.0f;
+    sv->drift_z = 0.0f;
     sv->anim_frame = 0.0f;
     sv->pilot_active = false;
 
-    sv->texture    = sprite_load("rom:/ship.sprite");
-    sv->bg_texture = sprite_load("rom:/starfield.sprite");
+    sv->texture = sprite_load("rom:/ship.sprite");
 
-    sv->verts     = malloc_uncached(sizeof(T3DVertPacked) * SHIP_NUM_TRIS * 2);
-    sv->matrices  = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
-    sv->bg_matrix = malloc_uncached(sizeof(T3DMat4FP));
-    sv->bg_verts  = malloc_uncached(sizeof(T3DVertPacked) * 2);
+    sv->star_textures[0] = sprite_load("rom:/star_white.sprite");
+    sv->star_textures[1] = sprite_load("rom:/star_blue.sprite");
+    sv->star_textures[2] = sprite_load("rom:/star_yellow.sprite");
+    sv->star_textures[3] = sprite_load("rom:/star_red.sprite");
+
+    sv->verts        = malloc_uncached(sizeof(T3DVertPacked) * SHIP_NUM_TRIS * 2);
+    sv->matrices     = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+    sv->star_quad    = malloc_uncached(sizeof(T3DVertPacked) * 2);
+    sv->star_matrices = malloc_uncached(sizeof(T3DMat4FP) * SHIP_VIEW_STAR_COUNT);
+    sv->star_tex_idx = malloc(sizeof(uint8_t) * SHIP_VIEW_STAR_COUNT);
 
     build_verts(sv->verts);
-    build_bg_quad(sv->bg_verts);
+    build_star_quad(sv->star_quad);
 
-    // Backdrop sits far behind the ship so the camera frames it.
-    t3d_mat4fp_from_srt_euler(sv->bg_matrix,
-        (float[3]){1.0f, 1.0f, 1.0f},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){0.0f, 0.0f, 80.0f}
-    );
+    // Type distribution: heavy white, smaller helping of accents (matches
+    // stars.c so the two scenes look like the same galactic neighborhood).
+    const int per_type[SHIP_VIEW_STAR_TYPES] = {14, 5, 3, 2};  // sums to 24
+    int idx = 0;
+    for (int t = 0; t < SHIP_VIEW_STAR_TYPES; t++) {
+        for (int i = 0; i < per_type[t]; i++) {
+            sv->star_tex_idx[idx++] = (uint8_t)t;
+        }
+    }
+    lcg = 0x13371337u;
+    for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
+        place_star(&sv->star_matrices[i], 0.0f);
+    }
 
     return sv;
 }
@@ -153,26 +197,36 @@ void ship_view_update(ShipView *sv, int frameIdx,
         sv->z += cosf(sv->yaw) * sv->vel;
         roll = -steer * 0.25f;  // bank into turns
     } else {
-        // Idle: baked clip drives position + heading. We *replace* state
-        // with the clip values (rather than integrate) so the loop stays in
-        // sync regardless of how long pilot mode was active.
+        // Idle: baked clip drives bob/sway/wobble; we layer constant forward
+        // drift on top so the camera advances through the star field.
         sv->anim_frame += 1.0f;
         if (sv->anim_frame >= (float)SHIP_IDLE_NUM_FRAMES) {
             sv->anim_frame -= (float)SHIP_IDLE_NUM_FRAMES;
         }
         float fx, fy, fz, fpitch, fyaw, froll;
         sample_idle(sv->anim_frame, &fx, &fy, &fz, &fpitch, &fyaw, &froll);
-        // The animation is in local "drift space"; multiply by ~14 to match
-        // the ship's world scale (see gen-ship-c.py).
+        // Anim is in local "drift space"; multiply by ~14 to match the ship's
+        // world scale (see gen-ship-c.py).
         const float A = 14.0f;
+        sv->drift_z += IDLE_DRIFT_VEL;
         sv->x = fx * A;
         sv->y = fy * A;
-        sv->z = fz * A;
-        sv->yaw = fyaw;
-        pitch = fpitch;
-        roll  = froll;
+        sv->z = sv->drift_z + fz * A;
+        sv->yaw = fyaw;   // baked clip yaw is 0
+        pitch   = fpitch;
+        roll    = froll;
         sv->vel = 0.0f;
     }
+
+    // Cycle one star per frame to a fresh spot ahead of the ship — keeps
+    // the field "infinite" without needing thousands of stars or a per-frame
+    // bounds-check loop. With SHIP_VIEW_STAR_COUNT=24 the whole field
+    // refreshes about every 24 frames (~0.4s), fast enough that the player
+    // never sees an empty pocket.
+    static int next_recycle = 0;
+    place_star(&sv->star_matrices[next_recycle],
+               sv->z + STAR_BOX_Z_HALF);
+    next_recycle = (next_recycle + 1) % SHIP_VIEW_STAR_COUNT;
 
     t3d_mat4fp_from_srt_euler(&sv->matrices[frameIdx],
         (float[3]){1.0f, 1.0f, 1.0f},
@@ -220,21 +274,34 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     t3d_light_set_directional(0, key, &keyDir);
     t3d_light_set_count(1);
 
-    // ---- Backdrop: starfield quad, drawn first with depth disabled.
-    rdpq_sync_pipe();
-    rdpq_sync_tile();
-    rdpq_sprite_upload(TILE0, sv->bg_texture, NULL);
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_SHADE);
-    rdpq_mode_filter(FILTER_BILINEAR);
-    t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_SHADED);
-    t3d_matrix_push(sv->bg_matrix);
-    t3d_vert_load(sv->bg_verts, 0, 4);
-    t3d_tri_draw(0, 1, 2);
-    t3d_tri_draw(0, 2, 3);
-    t3d_tri_sync();
-    t3d_matrix_pop(1);
+    // ---- Background star billboards: unlit textured quads with alpha-test
+    // so the sprites' transparent pixels punch through to the cleared color.
+    // Same draw style as src/stars.c (TEX_FLAT + alphacompare).
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    rdpq_mode_filter(FILTER_POINT);
+    rdpq_mode_alphacompare(1);
+    t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH);
 
-    // ---- Ship: depth-tested + lit.
+    uint8_t last_tex = 0xFF;
+    for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
+        uint8_t t = sv->star_tex_idx[i];
+        if (t != last_tex) {
+            rdpq_sync_pipe();
+            rdpq_sync_tile();
+            rdpq_sprite_upload(TILE0, sv->star_textures[t], NULL);
+            last_tex = t;
+        }
+        t3d_matrix_push(&sv->star_matrices[i]);
+        t3d_vert_load(sv->star_quad, 0, 4);
+        t3d_tri_draw(0, 1, 2);
+        t3d_tri_draw(0, 2, 3);
+        t3d_tri_sync();
+        t3d_matrix_pop(1);
+    }
+    rdpq_mode_alphacompare(0);
+
+    // ---- Ship: lit + textured.
     rdpq_sync_pipe();
     rdpq_sync_tile();
     rdpq_sprite_upload(TILE0, sv->texture, NULL);

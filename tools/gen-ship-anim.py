@@ -20,32 +20,38 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_JSON = os.path.join(ROOT, "assets", "animations", "ship_idle.anim.json")
 OUT_H    = os.path.join(ROOT, "src", "ship_idle_anim.h")
 
-# 120-frame loop at 60 Hz = 2 second cycle.
-NUM_FRAMES = 120
+# 240-frame loop at 60 Hz = 4 second cycle. Long-ish so the per-frame
+# bob/sway feels gentle rather than oscillatory.
+NUM_FRAMES = 240
 FPS = 60
 LOOP = True
 
-# Orbit radius / bob amplitude in the corner viewport's local space (units
-# match SHIP_WORLD_SCALE in gen-ship-c.py — i.e. 1.0 = ~14 game units).
-ORBIT_R   = 0.6
-BOB_AMP   = 0.25
-ROLL_AMP  = 0.15  # radians of bank
+# Bob amplitudes for the idle clip. The ship is meant to read as "drifting
+# forward through space" — there is NO yaw rotation in the clip; forward
+# motion is added procedurally on top by ship_view.c so the camera + stars
+# track properly. Only subtle pitch/roll wobble + Y bob here.
+BOB_AMP   = 0.18      # Y bob in local units (× ~14 = world units)
+PITCH_AMP = 0.04      # radians (~2.3°)
+ROLL_AMP  = 0.06      # radians (~3.4°)
+SWAY_AMP  = 0.08      # tiny lateral sway in X (so the parallax isn't dead-straight)
 
 
 def main() -> None:
     frames = []
     for i in range(NUM_FRAMES):
         t = (i / NUM_FRAMES) * 2.0 * math.pi
-        # Position: circle in XZ plane + sinusoidal Y bob.
-        px = math.cos(t) * ORBIT_R
-        pz = math.sin(t) * ORBIT_R
-        py = math.sin(t * 2.0) * BOB_AMP
-        # Yaw: tangent to the orbit (face direction of travel).
-        yaw = -t + math.pi * 0.5
-        # Roll: bank into turns (negative cos so bank peaks at the side of the orbit).
-        roll = -math.cos(t) * ROLL_AMP
-        # Pitch: gentle up/down following the bob.
-        pitch = math.cos(t * 2.0) * 0.05
+        # Position: stays near origin in XZ — the actual forward motion is
+        # applied procedurally by ship_view.c. We just give a subtle bob and
+        # tiny lateral sway here.
+        px = math.sin(t) * SWAY_AMP
+        py = math.sin(t * 1.5) * BOB_AMP
+        pz = 0.0
+        # Heading: zero yaw. The clip is "ship pointing straight forward".
+        yaw = 0.0
+        # Pitch / roll: gentle wobble, slightly out of phase so the motion
+        # doesn't read as a single oscillation.
+        pitch = math.sin(t * 1.5) * PITCH_AMP
+        roll  = math.sin(t + 0.7) * ROLL_AMP
         frames.append({
             "pos":   [round(px, 4), round(py, 4), round(pz, 4)],
             "euler": [round(pitch, 4), round(yaw, 4), round(roll, 4)],

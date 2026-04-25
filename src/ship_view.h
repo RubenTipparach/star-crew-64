@@ -11,14 +11,26 @@
 #define SHIP_VIEW_X        (320 - SHIP_VIEW_WIDTH - 4)   // small inset from the screen edge
 #define SHIP_VIEW_Y        4
 
+// Number of background star billboards scattered around the corner-viewport
+// camera. Each is a cool-stuff star_*.png sprite drawn as a small quad — the
+// same approach src/stars.c uses for the bridge-exterior starfield. Scale is
+// tuned so each star reads as a clear 2-3px dot at the 80×60 corner size.
+#define SHIP_VIEW_STAR_COUNT  24
+#define SHIP_VIEW_STAR_TYPES   4
+
 typedef struct {
     T3DViewport    viewport;       // its own viewport, sub-region of the framebuffer
     T3DVertPacked *verts;          // SHIP_NUM_TRIS * 2 packed structs
     T3DMat4FP     *matrices;       // FB_COUNT — animated each frame
-    T3DMat4FP     *bg_matrix;      // static, for the starfield backdrop quad
-    T3DVertPacked *bg_verts;       // 2 packed structs = 4 verts (one quad)
     sprite_t      *texture;
-    sprite_t      *bg_texture;     // starfield
+
+    // Background star billboards. We allocate ALL star textures (white/blue/
+    // yellow/red, sourced from cool-stuff's gen-textures.py) and per-star
+    // matrices wrapped in a small shared quad mesh.
+    sprite_t      *star_textures[SHIP_VIEW_STAR_TYPES];
+    T3DVertPacked *star_quad;      // 2 packed structs, shared across stars
+    T3DMat4FP     *star_matrices;  // SHIP_VIEW_STAR_COUNT entries
+    uint8_t       *star_tex_idx;   // SHIP_VIEW_STAR_COUNT entries, into star_textures
 
     // World-space ship state. While "captive" (no pilot) the ship rides the
     // baked SHIP_IDLE animation; while a pilot drives it, steer rotates yaw
@@ -26,6 +38,7 @@ typedef struct {
     float          yaw;            // radians, world-space heading
     float          x, y, z;        // world-space position (drift in +X+Z plane)
     float          vel;            // forward speed, units/frame
+    float          drift_z;        // procedural forward drift integrated while idle
 
     // Idle clip playback (used only when pilot_active is false). Frame index
     // is float so we can sample fractional times for smooth playback.

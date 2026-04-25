@@ -342,42 +342,6 @@ def make_ship() -> list[tuple[int, int, int, int]]:
     return px
 
 
-def make_starfield() -> list[tuple[int, int, int, int]]:
-    """
-    Background starfield (32x32). Deep navy with sparse white/blue stars at
-    deterministic positions; tiles seamlessly so the corner viewport can pan
-    it as the ship moves.
-    """
-    space    = (8, 10, 22, 255)
-    nebula   = (24, 18, 50, 255)
-    star_dim = (140, 150, 200, 255)
-    star_md  = (210, 220, 240, 255)
-    star_br  = (255, 255, 255, 255)
-
-    px = [space] * (SIZE * SIZE)
-    for y in range(SIZE):
-        for x in range(SIZE):
-            # soft nebula bands — low-frequency ripple
-            if ((x * 3 + y * 2) // 6) % 5 == 0:
-                px[y * SIZE + x] = nebula
-    # deterministic "random" star positions via hash, ~ 30 stars
-    rng = 1234567
-    for i in range(30):
-        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
-        sx = rng % SIZE
-        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
-        sy = rng % SIZE
-        rng = (rng * 1103515245 + 12345) & 0x7FFFFFFF
-        kind = rng % 10
-        if kind < 6:
-            px[sy * SIZE + sx] = star_dim
-        elif kind < 9:
-            px[sy * SIZE + sx] = star_md
-        else:
-            px[sy * SIZE + sx] = star_br
-    return px
-
-
 def make_character() -> list[tuple[int, int, int, int]]:
     """
     Character UV atlas (32x32). Laid out as 4 horizontal bands, each 32x8:
@@ -463,7 +427,6 @@ def main() -> None:
         "character.png": make_character(),
         "bridge_panel.png": make_bridge_panel(),
         "ship.png": make_ship(),
-        "starfield.png": make_starfield(),
     }
     for name, pixels in big_outputs.items():
         path = os.path.join(OUT, name)
@@ -482,12 +445,13 @@ def main() -> None:
         write_png(path, pixels, STAR_SIZE)
         print(f"  wrote {path}")
 
-    # Clean up the old 32×32 starfield texture if it's still sitting around —
-    # we replaced it with the four 8×8 billboard sprites above.
-    stale = os.path.join(OUT, "stars.png")
-    if os.path.exists(stale):
-        os.remove(stale)
-        print(f"  removed {stale}")
+    # Clean up old single-sheet star textures that have been replaced by the
+    # individual 8×8 billboard sprites above.
+    for stale_name in ("stars.png", "starfield.png"):
+        stale = os.path.join(OUT, stale_name)
+        if os.path.exists(stale):
+            os.remove(stale)
+            print(f"  removed {stale}")
 
 
 if __name__ == "__main__":
