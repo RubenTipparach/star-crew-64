@@ -6,10 +6,10 @@
 
 // Pixel size + position of the corner overlay (top-right) — 1/4 of a 320x240
 // frame ≈ 80x60. Constants live in the header so main.c can reason about them.
-#define SHIP_VIEW_W   80
-#define SHIP_VIEW_H   60
-#define SHIP_VIEW_X   (320 - SHIP_VIEW_W - 4)   // small inset from the screen edge
-#define SHIP_VIEW_Y   4
+#define SHIP_VIEW_WIDTH    80
+#define SHIP_VIEW_HEIGHT   60
+#define SHIP_VIEW_X        (320 - SHIP_VIEW_WIDTH - 4)   // small inset from the screen edge
+#define SHIP_VIEW_Y        4
 
 typedef struct {
     T3DViewport    viewport;       // its own viewport, sub-region of the framebuffer

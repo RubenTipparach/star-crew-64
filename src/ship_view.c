@@ -194,7 +194,7 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     // Confine drawing to the corner rect. tiny3d's set_area also re-derives
     // the projection matrix's aspect ratio off the sub-region.
     t3d_viewport_set_area(&sv->viewport, SHIP_VIEW_X, SHIP_VIEW_Y,
-                          SHIP_VIEW_W, SHIP_VIEW_H);
+                          SHIP_VIEW_WIDTH, SHIP_VIEW_HEIGHT);
     t3d_viewport_set_projection(&sv->viewport,
         T3D_DEG_TO_RAD(SV_FOV_DEG), SV_NEAR, SV_FAR);
     t3d_viewport_look_at(&sv->viewport, &cam_pos, &cam_tgt, &cam_up);
@@ -203,7 +203,8 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     // Constrain the rdpq scissor so the inner clear + draws don't bleed
     // over the main scene that we already rendered.
     rdpq_set_scissor(SHIP_VIEW_X, SHIP_VIEW_Y,
-                     SHIP_VIEW_X + SHIP_VIEW_W, SHIP_VIEW_Y + SHIP_VIEW_H);
+                     SHIP_VIEW_X + SHIP_VIEW_WIDTH,
+                     SHIP_VIEW_Y + SHIP_VIEW_HEIGHT);
 
     // Solid space-black fill + cleared depth, isolated to the sub-rect.
     t3d_screen_clear_color(RGBA32(8, 10, 22, 0xFF));
