@@ -4,7 +4,7 @@
 // that FTL top-down-ish feel while still being a perspective projection.
 #define CAMERA_FOV_DEG   50.0f
 #define CAMERA_NEAR      10.0f
-#define CAMERA_FAR       500.0f
+#define CAMERA_FAR       900.0f   // must comfortably exceed STAR_R_MAX (500) + camera offset (~105)
 
 // Offset from the camera's target point. Y is height, X/Z are equal so we
 // look down the diagonal.

@@ -10,6 +10,7 @@
 #include "character.h"
 #include "level.h"
 #include "lighting.h"
+#include "stars.h"
 
 // Character movement speed in world units per frame (at ~60fps).
 #define MOVE_SPEED 0.6f
@@ -52,6 +53,7 @@ int main(void)
     Camera camera = camera_create();
     Level *level = level_load(STARTING_LEVEL_PATH);
     Character *hero = character_create();
+    Stars *stars = stars_create();
 
     // Spawn the hero on the "spawn" entity if one was placed in the editor;
     // otherwise leave him at the world origin (which is the grid's center).
@@ -92,8 +94,23 @@ int main(void)
         const float k = 0.7071f;
         float dx = (sx - sy) * k * MOVE_SPEED;   // sx·right.x + sy·forward.x
         float dz = -(sx + sy) * k * MOVE_SPEED;  // sx·right.z + sy·forward.z
-        hero->position.v[0] += dx;
-        hero->position.v[2] += dz;
+
+        // Axis-separated collision: apply each axis only if it lands on a
+        // walkable tile. This lets the hero slide along walls instead of
+        // stopping dead when motion is blocked on one axis.
+        float hx = hero->position.v[0];
+        float hz = hero->position.v[2];
+        if (level_is_walkable(level, hx + dx, hz)) {
+            hero->position.v[0] = hx + dx;
+        } else {
+            dx = 0.0f;
+        }
+        if (level_is_walkable(level, hero->position.v[0], hz + dz)) {
+            hero->position.v[2] = hz + dz;
+        } else {
+            dz = 0.0f;
+        }
+
         float speed = sqrtf(dx * dx + dz * dz);
         if (speed > 0.01f) {
             character_face_direction(hero, atan2f(dx, -dz), TURN_SMOOTHING);
@@ -122,6 +139,7 @@ int main(void)
         int totalLights = lighting_apply_points(lights, NUM_POINT_LIGHTS);
         lighting_finalize(totalLights);
 
+        stars_draw(stars);
         level_draw(level);
         character_draw(hero, frameIdx);
 
