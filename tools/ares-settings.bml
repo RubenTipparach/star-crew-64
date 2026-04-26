@@ -1,0 +1,44 @@
+// star-crew-64 — recommended ares input bindings.
+//
+// Use tools/install-ares-settings.sh to merge this into your ares settings.bml.
+//
+// VirtualPad1 maps the N64 controller. Each line has three semicolon-separated
+// fields:  KEYBOARD ; PRIMARY GAMEPAD ; SECONDARY GAMEPAD
+//
+// The PRIMARY GAMEPAD column here matches the Xbox-style controller already
+// detected on this machine (vendor 0x045E / product 0x02E0 — Xbox One BLE).
+// If your controller has a different USB ID, the install script will preserve
+// whatever you've already paired in ares' Settings UI.
+//
+// The KEYBOARD column uses ares' textual SDL identifiers (Keyboard0/<key>).
+// Some ares builds prefer a hash-style ID instead (`0x.../<scancode>`); if no
+// keyboard input registers in-game, open ares → Settings → Input → Nintendo 64
+// → Port 1 → Gamepad and click each entry to re-record. Then run
+// tools/save-ares-settings.sh to commit the working bindings back here.
+
+VirtualPad1
+  Pad.Up:           Keyboard0/Up;0x1045e02e0/3/10;
+  Pad.Down:         Keyboard0/Down;0x1045e02e0/3/7;
+  Pad.Left:         Keyboard0/Left;0x1045e02e0/3/8;
+  Pad.Right:        Keyboard0/Right;0x1045e02e0/3/9;
+  Select:           Keyboard0/Backspace;0x1045e02e0/3/4;
+  Start:            Keyboard0/Return;0x1045e02e0/3/3;
+  A..South:         Keyboard0/Z;0x1045e02e0/3/0;
+  B..East:          Keyboard0/X;0x1045e02e0/3/1;
+  X..West:          Keyboard0/A;0x1045e02e0/3/5;
+  Y..North:         Keyboard0/S;0x1045e02e0/3/6;
+  L-Bumper:         Keyboard0/Q;0x1045e02e0/3/11;
+  R-Bumper:         Keyboard0/E;0x1045e02e0/3/14;
+  L-Trigger:        Keyboard0/1;0x1045e02e0/3/13;
+  R-Trigger:        Keyboard0/3;0x1045e02e0/3/16;
+  L-Stick..Click:   Keyboard0/F;0x1045e02e0/3/12;
+  R-Stick..Click:   Keyboard0/G;0x1045e02e0/3/15;
+  L-Up:             Keyboard0/W;0x1045e02e0/0/1/Hi;
+  L-Down:           Keyboard0/S;0x1045e02e0/0/1/Lo;
+  L-Left:           Keyboard0/A;0x1045e02e0/0/0/Lo;
+  L-Right:          Keyboard0/D;0x1045e02e0/0/0/Hi;
+  R-Up:             Keyboard0/I;0x1045e02e0/0/4/Hi;
+  R-Down:           Keyboard0/K;0x1045e02e0/0/4/Lo;
+  R-Left:           Keyboard0/J;0x1045e02e0/0/3/Lo;
+  R-Right:          Keyboard0/L;0x1045e02e0/0/3/Hi;
+  Rumble:           ;;
