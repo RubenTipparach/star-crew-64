@@ -53,7 +53,11 @@ static const int16_t PART_UV_V1[CHARACTER_NUM_PARTS] = {
     UV(8), UV(8), UV(16), UV(24), UV(24), UV(32), UV(32),
 };
 
-static Character character_instance = {0};
+// Up to two players (one per controller). character_create() hands out the
+// next free slot — main.c calls it once per detected controller.
+#define MAX_CHARACTERS 2
+static Character character_slots[MAX_CHARACTERS] = {0};
+static int next_character_slot = 0;
 
 // Build the 12 T3DVertPacked (6 faces × 2) for one axis-aligned box part.
 // The caller passes the 8 corners laid out in the same order as box_verts()
@@ -135,7 +139,9 @@ static void build_part(T3DVertPacked *out, const int16_t corners[8][3],
 
 Character* character_create(void)
 {
-    Character *c = &character_instance;
+    assertf(next_character_slot < MAX_CHARACTERS,
+            "character_create: too many characters (max %d)", MAX_CHARACTERS);
+    Character *c = &character_slots[next_character_slot++];
     c->position = (T3DVec3){{0, 0, 0}};
     c->rot_y = 0.0f;
     c->walk_phase = 0.0f;

@@ -485,6 +485,130 @@ def _make_star_sprite(core, halo) -> list[tuple[int, int, int, int]]:
     return px
 
 
+# ---- Button prompt sprites (16×16, transparent background) ---------------
+# Each sprite is a small icon hovered above a player when they're in range
+# of a console. The four icons cover the whole gameplay vocabulary:
+#   - prompt_a / prompt_b / prompt_z : N64 button labels in their canonical
+#     colors (A=blue, B=green, Z=grey/black) so muscle memory still works.
+#   - prompt_stick : a circular d-pad/stick glyph for "use the stick".
+# All four share the same canvas size + circular shape so they hover at a
+# consistent screen size when stacked or shown alone.
+
+PROMPT_SIZE = 16
+
+
+def _make_button_sprite(label: str, fill: tuple, outline: tuple,
+                        text: tuple) -> list[tuple[int, int, int, int]]:
+    """16×16 round button with a single ASCII glyph centered. Background is
+    fully transparent so the billboard reads as a floating disk."""
+    bg = (0, 0, 0, 0)
+    px = [bg] * (PROMPT_SIZE * PROMPT_SIZE)
+    cx = cy = 7.5  # center between pixels 7 and 8 so the disk is symmetric
+    r_outer = 7.0
+    r_inner = 5.6
+
+    for y in range(PROMPT_SIZE):
+        for x in range(PROMPT_SIZE):
+            dx = x - cx
+            dy = y - cy
+            d = (dx * dx + dy * dy) ** 0.5
+            if d <= r_inner:
+                px[y * PROMPT_SIZE + x] = fill
+            elif d <= r_outer:
+                px[y * PROMPT_SIZE + x] = outline
+
+    # 5x5 bitmap glyphs centered at (8, 8). Just A / B / Z — the only
+    # labels we need.
+    glyphs = {
+        "A": [
+            "..#..",
+            ".#.#.",
+            ".###.",
+            ".#.#.",
+            ".#.#.",
+        ],
+        "B": [
+            ".##..",
+            ".#.#.",
+            ".##..",
+            ".#.#.",
+            ".##..",
+        ],
+        "Z": [
+            ".###.",
+            "...#.",
+            "..#..",
+            ".#...",
+            ".###.",
+        ],
+    }
+    glyph = glyphs.get(label.upper())
+    if glyph is not None:
+        # Place glyph so its 5x5 footprint is centered on (8, 8).
+        gx0 = 5
+        gy0 = 5
+        for gy, row in enumerate(glyph):
+            for gx, ch in enumerate(row):
+                if ch == "#":
+                    px[(gy0 + gy) * PROMPT_SIZE + (gx0 + gx)] = text
+    return px
+
+
+def make_prompt_a():
+    return _make_button_sprite("A",
+        fill=(70, 130, 220, 255),     # N64 blue
+        outline=(20, 60, 120, 255),
+        text=(255, 255, 255, 255))
+
+
+def make_prompt_b():
+    return _make_button_sprite("B",
+        fill=(70, 200, 110, 255),     # N64 green
+        outline=(20, 100, 50, 255),
+        text=(255, 255, 255, 255))
+
+
+def make_prompt_z():
+    return _make_button_sprite("Z",
+        fill=(80, 80, 88, 255),       # dark trigger grey
+        outline=(20, 20, 24, 255),
+        text=(240, 240, 250, 255))
+
+
+def make_prompt_stick() -> list[tuple[int, int, int, int]]:
+    """Stick glyph: a grey ring with a 4-direction arrow rosette inside.
+    Reads as 'use the stick' at the small billboard size."""
+    bg = (0, 0, 0, 0)
+    fill    = (200, 200, 210, 255)
+    outline = (60,  60,  70,  255)
+    arrow   = (40,  40,  50,  255)
+    px = [bg] * (PROMPT_SIZE * PROMPT_SIZE)
+    cx = cy = 7.5
+    r_outer = 7.0
+    r_inner = 5.6
+    r_dot   = 1.6
+    for y in range(PROMPT_SIZE):
+        for x in range(PROMPT_SIZE):
+            dx = x - cx
+            dy = y - cy
+            d2 = dx * dx + dy * dy
+            d = d2 ** 0.5
+            if d <= r_dot:
+                px[y * PROMPT_SIZE + x] = arrow
+            elif d <= r_inner:
+                px[y * PROMPT_SIZE + x] = fill
+            elif d <= r_outer:
+                px[y * PROMPT_SIZE + x] = outline
+    # Tiny arrow tips at the four cardinals — pixel triangles 1px deep.
+    for ax, ay in ((8, 1), (8, 14), (1, 8), (14, 8)):
+        px[ay * PROMPT_SIZE + ax] = arrow
+    # +1 pixel wider at base so the tips aren't single-pixel specks.
+    for ax, ay in ((7, 2), (9, 2), (7, 13), (9, 13),
+                   (2, 7), (2, 9), (13, 7), (13, 9)):
+        px[ay * PROMPT_SIZE + ax] = arrow
+    return px
+
+
 def make_star_white():
     return _make_star_sprite(core=(255, 255, 250, 255), halo=(160, 160, 180, 255))
 
@@ -530,6 +654,18 @@ def main() -> None:
     for name, pixels in small_outputs.items():
         path = os.path.join(OUT, name)
         write_png(path, pixels, STAR_SIZE)
+        print(f"  wrote {path}")
+
+    # 16×16 console-prompt button glyphs (transparent background).
+    prompt_outputs = {
+        "prompt_a.png":     make_prompt_a(),
+        "prompt_b.png":     make_prompt_b(),
+        "prompt_z.png":     make_prompt_z(),
+        "prompt_stick.png": make_prompt_stick(),
+    }
+    for name, pixels in prompt_outputs.items():
+        path = os.path.join(OUT, name)
+        write_png(path, pixels, PROMPT_SIZE)
         print(f"  wrote {path}")
 
     # Clean up old single-sheet star textures that have been replaced by the

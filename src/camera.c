@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "camera.h"
 
 // 3/4 isometric-style view. Narrow FOV + elevated, diagonal position gives
@@ -45,6 +47,48 @@ void camera_set_target(Camera *camera, float x, float y, float z)
         x + CAMERA_OFFSET_X,
         ty + CAMERA_OFFSET_Y,
         z + CAMERA_OFFSET_Z,
+    }};
+}
+
+// How much to scale the camera offset per world unit of player separation.
+// At separation 0 the offset is 1× (default zoom); at separation
+// SEPARATION_MAX it's about 1.7× — enough to keep both players in frame
+// without the camera flying impossibly high on a normal-sized bridge.
+#define ZOOM_SLOPE       0.0035f
+#define ZOOM_MAX         1.7f
+#define ZOOM_LERP        0.10f       // smooth zoom-in/out so it doesn't snap
+
+static float current_zoom = 1.0f;
+
+void camera_set_target_pair(Camera *camera,
+                            float p1_x, float y, float p1_z,
+                            float p2_x, float p2_z,
+                            bool p2_active)
+{
+    float tx, tz;
+    float target_zoom = 1.0f;
+
+    if (p2_active) {
+        tx = (p1_x + p2_x) * 0.5f;
+        tz = (p1_z + p2_z) * 0.5f;
+        float dx = p2_x - p1_x;
+        float dz = p2_z - p1_z;
+        float sep = sqrtf(dx * dx + dz * dz);
+        target_zoom = 1.0f + sep * ZOOM_SLOPE;
+        if (target_zoom > ZOOM_MAX) target_zoom = ZOOM_MAX;
+    } else {
+        tx = p1_x;
+        tz = p1_z;
+    }
+
+    current_zoom += (target_zoom - current_zoom) * ZOOM_LERP;
+
+    float ty = y + CAMERA_TARGET_Y_BIAS;
+    camera->target = (T3DVec3){{tx, ty, tz}};
+    camera->position = (T3DVec3){{
+        tx + CAMERA_OFFSET_X * current_zoom,
+        ty + CAMERA_OFFSET_Y * current_zoom,
+        tz + CAMERA_OFFSET_Z * current_zoom,
     }};
 }
 
