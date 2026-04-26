@@ -46,11 +46,14 @@ typedef struct {
     sprite_t      *texture;
 
     // Background star billboards. We allocate ALL star textures (white/blue/
-    // yellow/red, sourced from cool-stuff's gen-textures.py) and per-star
-    // matrices wrapped in a small shared quad mesh.
+    // yellow/red, sourced from cool-stuff's gen-textures.py), a shared
+    // camera-aligned quad mesh, and per-star world positions. Matrices are
+    // rebuilt every frame from positions + ship position so each star is a
+    // true spherical billboard (quad normal aimed at the corner camera).
     sprite_t      *star_textures[SHIP_VIEW_STAR_TYPES];
     T3DVertPacked *star_quad;      // 2 packed structs, shared across stars
     T3DMat4FP     *star_matrices;  // SHIP_VIEW_STAR_COUNT entries
+    float         *star_positions; // 3 * SHIP_VIEW_STAR_COUNT — XYZ in world
     uint8_t       *star_tex_idx;   // SHIP_VIEW_STAR_COUNT entries, into star_textures
 
     // World-space ship state. While "captive" (no pilot) the ship rides the

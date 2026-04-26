@@ -65,27 +65,31 @@ static void build_verts(T3DVertPacked *out)
     }
 }
 
-// Tiny horizontal star quad lying on XZ at local origin — same convention as
-// src/stars.c. Per-star matrices place each instance.
+// Star quad in the camera-facing local frame: lies in the XY plane with its
+// normal at +Z. The per-star matrix orients this quad so that local +Z aims
+// at the chase camera, giving every star a true spherical billboard look
+// (rather than the old XZ-plane horizontal slab that read as edge-on lines
+// from the corner camera's downward tilt).
 static void build_star_quad(T3DVertPacked *out)
 {
     const int16_t H = STAR_QUAD_HALF;
-    uint16_t nUp = t3d_vert_pack_normal(&(T3DVec3){{0, 1, 0}});
+    uint16_t nFwd = t3d_vert_pack_normal(&(T3DVec3){{0, 0, 1}});
     uint32_t white = 0xFFFFFFFF;
     int16_t u0 = UV(0), v0 = UV(0), u1 = UV(8), v1 = UV(8);
 
+    // Vertex order: bot-left, bot-right, top-right, top-left. UVs follow the
+    // same orientation so the texture's "up" lines up with local +Y.
     out[0] = (T3DVertPacked){
-        .posA = {-H, 0, -H}, .rgbaA = white, .normA = nUp, .stA = {u0, v0},
-        .posB = { H, 0, -H}, .rgbaB = white, .normB = nUp, .stB = {u1, v0},
+        .posA = {-H, -H, 0}, .rgbaA = white, .normA = nFwd, .stA = {u0, v1},
+        .posB = { H, -H, 0}, .rgbaB = white, .normB = nFwd, .stB = {u1, v1},
     };
     out[1] = (T3DVertPacked){
-        .posA = { H, 0,  H}, .rgbaA = white, .normA = nUp, .stA = {u1, v1},
-        .posB = {-H, 0,  H}, .rgbaB = white, .normB = nUp, .stB = {u0, v1},
+        .posA = { H,  H, 0}, .rgbaA = white, .normA = nFwd, .stA = {u1, v0},
+        .posB = {-H,  H, 0}, .rgbaB = white, .normB = nFwd, .stB = {u0, v0},
     };
 }
 
-// Deterministic LCG so the star pattern is reproducible (and matches across
-// builds).
+// Deterministic LCG so the star pattern is reproducible across runs.
 static uint32_t lcg = 0x13371337u;
 static float frand01(void)
 {
@@ -93,19 +97,44 @@ static float frand01(void)
     return (lcg >> 8) * (1.0f / 16777216.0f);
 }
 
-static void place_star(T3DMat4FP *m, float ship_z)
+// Build a 3x4 affine that places a star at `pos` and orients its local +Z
+// toward the camera (true spherical billboard). Local +X aligns with
+// (world_up × to_cam) so the texture's horizontal sits screen-horizontal,
+// and local +Y completes the right-handed basis.
+static void build_star_matrix(T3DMat4FP *out, const float pos[3],
+                              const T3DVec3 *cam)
 {
-    // X / Y are uniform in the box centred on the ship's lateral position.
-    // Z is uniform in the box centred just AHEAD of the ship (so most stars
-    // are visible from the trailing camera).
-    float x = (frand01() * 2.0f - 1.0f) * STAR_BOX_X_HALF;
-    float y = (frand01() * 2.0f - 1.0f) * STAR_BOX_Y_HALF;
-    float z = ship_z + (frand01() * 2.0f - 1.0f) * STAR_BOX_Z_HALF;
-    t3d_mat4fp_from_srt_euler(m,
-        (float[3]){1.0f, 1.0f, 1.0f},
-        (float[3]){0.0f, 0.0f, 0.0f},
-        (float[3]){x, y, z}
-    );
+    T3DVec3 to_cam = {{
+        cam->v[0] - pos[0],
+        cam->v[1] - pos[1],
+        cam->v[2] - pos[2],
+    }};
+    t3d_vec3_norm(&to_cam);
+
+    T3DVec3 world_up = {{0.0f, 1.0f, 0.0f}};
+    T3DVec3 right;
+    t3d_vec3_cross(&right, &world_up, &to_cam);
+    // Degenerate case: star directly above/below camera. Fall back to world
+    // +X so we at least produce a valid basis.
+    float rlen2 = right.v[0]*right.v[0] + right.v[1]*right.v[1]
+                + right.v[2]*right.v[2];
+    if (rlen2 < 1e-6f) {
+        right = (T3DVec3){{1.0f, 0.0f, 0.0f}};
+    } else {
+        t3d_vec3_norm(&right);
+    }
+
+    T3DVec3 up;
+    t3d_vec3_cross(&up, &to_cam, &right);
+
+    // Row-vector convention: row i = local axis i mapped into world.
+    T3DMat4 m = {{
+        { right.v[0],  right.v[1],  right.v[2],  0.0f },
+        { up.v[0],     up.v[1],     up.v[2],     0.0f },
+        { to_cam.v[0], to_cam.v[1], to_cam.v[2], 0.0f },
+        { pos[0],      pos[1],      pos[2],      1.0f },
+    }};
+    t3d_mat4_to_fixed_3x4(out, &m);
 }
 
 ShipView* ship_view_create(void)
@@ -130,6 +159,7 @@ ShipView* ship_view_create(void)
     sv->matrices     = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
     sv->star_quad    = malloc_uncached(sizeof(T3DVertPacked) * 2);
     sv->star_matrices = malloc_uncached(sizeof(T3DMat4FP) * SHIP_VIEW_STAR_COUNT);
+    sv->star_positions = malloc(sizeof(float) * 3 * SHIP_VIEW_STAR_COUNT);
     sv->star_tex_idx = malloc(sizeof(uint8_t) * SHIP_VIEW_STAR_COUNT);
     sv->proj_mesh    = mesh_create_laser_cube();   // tiny vertex-coloured cube
     sv->proj_matrices = malloc_uncached(
@@ -150,10 +180,20 @@ ShipView* ship_view_create(void)
             sv->star_tex_idx[idx++] = (uint8_t)t;
         }
     }
+    // Seed star world positions inside a box centred on the ship. Update()
+    // wraps each star modulo (2 * BOX_HALF) every frame so the field stays
+    // centred on the ship as it moves — no axis is special, the ship can fly
+    // forever in any direction without leaving the field.
     lcg = 0x13371337u;
     for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
-        place_star(&sv->star_matrices[i], 0.0f);
+        float *p = &sv->star_positions[i * 3];
+        p[0] = (frand01() * 2.0f - 1.0f) * STAR_BOX_X_HALF;
+        p[1] = (frand01() * 2.0f - 1.0f) * STAR_BOX_Y_HALF;
+        p[2] = (frand01() * 2.0f - 1.0f) * STAR_BOX_Z_HALF;
     }
+    // Matrices get filled by ship_view_update on the first frame; until then
+    // they may contain garbage, but update() runs before draw() so this is
+    // safe.
 
     return sv;
 }
@@ -165,41 +205,81 @@ void ship_view_update(ShipView *sv, int frameIdx,
 
     float pitch = 0.0f, roll = 0.0f;
 
+    // The console drives the thrusters; it does NOT teleport the ship. So
+    // pilot input only writes to yaw / vel here. Damping, clamp, and
+    // position integration run every frame regardless of who's at the
+    // console: the ship has inertia, and leaving the helm at speed must
+    // leave the ship coasting through space rather than snapping back to
+    // the origin.
     if (pilot_active) {
-        // Pilot drives: yaw integrates steer, position integrates velocity.
         sv->yaw += steer * SHIP_TURN_RATE;
         sv->vel += impulse * SHIP_ACCEL;
-        sv->vel *= SHIP_DAMP;
-        if (sv->vel >  SHIP_MAX_SPEED) sv->vel =  SHIP_MAX_SPEED;
-        if (sv->vel < -SHIP_MAX_SPEED) sv->vel = -SHIP_MAX_SPEED;
-        // Move along forward direction (+Z when yaw=0 due to nose at +Z).
-        sv->x += sinf(sv->yaw) * sv->vel;
-        sv->z += cosf(sv->yaw) * sv->vel;
         roll = -steer * 0.25f;  // bank into turns
-    } else {
-        // Idle: ship sits stationary until someone takes the helm. No drift,
-        // no bob — the baked clip + IDLE_DRIFT_VEL path is gone. Star
-        // recycling still runs each frame but lands stars at the same z=0
-        // shell, so the field stays put too.
-        sv->x = 0.0f;
-        sv->y = 0.0f;
-        sv->z = 0.0f;
-        sv->yaw = 0.0f;
-        sv->vel = 0.0f;
-        pitch = 0.0f;
-        roll  = 0.0f;
     }
 
-    // Cycle one star per frame to a fresh spot ahead of the ship — keeps the
-    // field "infinite" while moving without needing thousands of stars or a
-    // bounds-check loop. Skip while idle: the recycle would otherwise migrate
-    // every star forward of the ship over SHIP_VIEW_STAR_COUNT frames, even
-    // though sv->z isn't changing.
-    if (fabsf(sv->vel) > 0.001f) {
-        static int next_recycle = 0;
-        place_star(&sv->star_matrices[next_recycle],
-                   sv->z + STAR_BOX_Z_HALF);
-        next_recycle = (next_recycle + 1) % SHIP_VIEW_STAR_COUNT;
+    sv->vel *= SHIP_DAMP;
+    if (sv->vel >  SHIP_MAX_SPEED) sv->vel =  SHIP_MAX_SPEED;
+    if (sv->vel < -SHIP_MAX_SPEED) sv->vel = -SHIP_MAX_SPEED;
+
+    // Move along the model's nose. Nose is at local +Z (see gen-ship.py).
+    // tiny3d's t3d_mat4_from_srt_euler with row-vector convention maps
+    // local +Z to world (-sin yaw, 0, cos yaw) — see t3dmath.c:241. So
+    // forward in world is (-sin yaw, 0, cos yaw), NOT (sin yaw, 0, cos yaw)
+    // (the right-handed-math formula). The same convention is what makes
+    // CHARACTER_YAW_OFFSET = π work in character.c.
+    float fx = -sinf(sv->yaw);
+    float fz =  cosf(sv->yaw);
+    sv->x += fx * sv->vel;
+    sv->z += fz * sv->vel;
+
+    if (pilot_active) {
+        // Debug: dump heading, forward basis, velocity once a second so the
+        // motion direction is provable from the log without a debugger.
+        static int debug_tick = 0;
+        if ((debug_tick++ % 60) == 0) {
+            debugf("[ship] yaw=%.3f fwd=(%.3f,%.3f) vel=%.3f pos=(%.2f,%.2f) "
+                   "steer=%.2f impulse=%.2f\n",
+                   sv->yaw, fx, fz, sv->vel,
+                   sv->x, sv->z, steer, impulse);
+        }
+    }
+
+    // Wrap every star modulo (2 * BOX_HALF) on each axis around the ship.
+    // This keeps a uniform-density cloud centered on the ship in any
+    // direction it flies — no need to special-case forward motion. The wrap
+    // distance (BOX_HALF) is well outside the corner-camera frustum on every
+    // axis, so teleports happen off-screen and the player just sees an
+    // infinite parallax field.
+    //
+    // After wrapping, rebuild each star's matrix as a true spherical
+    // billboard aimed at the chase camera (which lives at ship + camera
+    // offset, see ship_view_draw). Cost: ~80 norm/cross/fixed-point converts
+    // per frame — well under 1ms on the N64.
+    const float TWO_X = 2.0f * STAR_BOX_X_HALF;
+    const float TWO_Y = 2.0f * STAR_BOX_Y_HALF;
+    const float TWO_Z = 2.0f * STAR_BOX_Z_HALF;
+    T3DVec3 cam = {{
+        sv->x,
+        sv->y + SV_CAM_OFF_Y,
+        sv->z + SV_CAM_OFF_Z,
+    }};
+    for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
+        float *p = &sv->star_positions[i * 3];
+
+        float dx = p[0] - sv->x;
+        float dy = p[1] - sv->y;
+        float dz = p[2] - sv->z;
+        if (dx >  STAR_BOX_X_HALF) dx -= TWO_X;
+        if (dx < -STAR_BOX_X_HALF) dx += TWO_X;
+        if (dy >  STAR_BOX_Y_HALF) dy -= TWO_Y;
+        if (dy < -STAR_BOX_Y_HALF) dy += TWO_Y;
+        if (dz >  STAR_BOX_Z_HALF) dz -= TWO_Z;
+        if (dz < -STAR_BOX_Z_HALF) dz += TWO_Z;
+        p[0] = sv->x + dx;
+        p[1] = sv->y + dy;
+        p[2] = sv->z + dz;
+
+        build_star_matrix(&sv->star_matrices[i], p, &cam);
     }
 
     t3d_mat4fp_from_srt_euler(&sv->matrices[frameIdx],
@@ -229,15 +309,19 @@ void ship_view_fire(ShipView *sv, ProjectileType type, float aim_yaw_offset)
     }
     if (slot < 0) return;
 
-    // Direction = ship heading + gunner's aim offset. Nose is +Z at yaw=0.
+    // Direction = ship heading + gunner's aim offset. Nose is at local +Z,
+    // and tiny3d's Y-rotation maps local +Z to world (-sin yaw, 0, cos yaw)
+    // (see ship_view_update for the same derivation). Use the same forward
+    // basis here so off-axis fire actually leaves the nose along the visible
+    // heading instead of mirroring across the X axis.
     float yaw = sv->yaw + aim_yaw_offset;
-    float fx = sinf(yaw);
-    float fz = cosf(yaw);
+    float fx = -sinf(yaw);
+    float fz =  cosf(yaw);
     // Spawn a short distance ahead of the hull along the SHIP heading (not
     // the aim direction) so torpedoes/phasers always emerge from the nose.
     const float NOSE_OFFSET = 12.0f;
-    float nx = sinf(sv->yaw);
-    float nz = cosf(sv->yaw);
+    float nx = -sinf(sv->yaw);
+    float nz =  cosf(sv->yaw);
 
     float speed    = (type == PROJ_TORPEDO) ? TORPEDO_SPEED    : PHASER_SPEED;
     int   lifetime = (type == PROJ_TORPEDO) ? TORPEDO_LIFETIME : PHASER_LIFETIME;
@@ -298,12 +382,19 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
 
     // ---- Background star billboards: unlit textured quads with alpha-test
     // so the sprites' transparent pixels punch through to the cleared color.
-    // Same draw style as src/stars.c (TEX_FLAT + alphacompare).
+    // Same draw style as src/stars.c (TEX_FLAT + alphacompare), but with NO
+    // depth flag — stars are a skybox-style background. If we let them write
+    // depth, any star scattered between camera and ship would punch its
+    // cross-shaped pixels into the depth buffer, and the ship's wings drawn
+    // afterward would fail the depth test in those pixels (looks like
+    // "stars-on-wings" with a wing-shaped halo around each cross).
+    // Drawing them first without depth means the ship always overdraws
+    // them cleanly.
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     rdpq_mode_filter(FILTER_POINT);
     rdpq_mode_alphacompare(1);
-    t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH);
+    t3d_state_set_drawflags(T3D_FLAG_TEXTURED);
 
     uint8_t last_tex = 0xFF;
     for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {

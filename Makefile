@@ -55,6 +55,19 @@ assets_conv = $(assets_sprites) $(assets_audio) $(LEVEL_BINS)
 # Main target
 all: $(PROJECT_NAME).z64
 
+# Star billboards: convert with RGBA16 instead of CI4. The PNGs from
+# gen-textures.py have transparent corners (alpha=0) around a small
+# opaque core+halo, but CI4's palette quantization in mksprite was
+# baking those transparent pixels as opaque palette entries — so
+# alpha-compare passed for every pixel and the stars rendered as solid
+# 8×8 squares. RGBA16 stores a real 1-bit alpha per pixel, so the
+# transparent corners survive end-to-end. Define this BEFORE the
+# generic %.sprite rules so Make picks the more-specific star_% match.
+filesystem/star_%.sprite: $(ASSETS_DIR)/textures/star_%.png
+	@mkdir -p $(dir $@)
+	@echo "    [SPRITE] $@ (RGBA16)"
+	$(N64_MKSPRITE) $(MKSPRITE_FLAGS) -f RGBA16 -o filesystem "$<"
+
 # Convert PNG to sprite (top-level)
 filesystem/%.sprite: $(ASSETS_DIR)/%.png
 	@mkdir -p $(dir $@)
