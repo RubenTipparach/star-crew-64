@@ -47,11 +47,14 @@
 #define PANEL_WORLD_Z   (10.0f)
 #define PANEL_FACING    (3.1415927f * 0.5f)   // face +X (away from the wall)
 
-// Weapons console: same room, opposite side. Far enough from the bridge
-// panel that the player can only be in one's interaction radius at a time.
-#define WEAPONS_WORLD_X (-180.0f)
-#define WEAPONS_WORLD_Z (-30.0f)
-#define WEAPONS_FACING  (3.1415927f * 0.5f)
+// Weapons console lives in the Engines room — far away from the bridge so
+// the gunner station is its own physical area and there's no chance of B
+// conflicting with the bridge panel's "impulse" hold. Engines spans
+// cells (17,7)..(23,12); world center ≈ (110, 0). Facing -π/2 puts the
+// screen visible from the -X side (where the hallway approaches).
+#define WEAPONS_WORLD_X (110.0f)
+#define WEAPONS_WORLD_Z (0.0f)
+#define WEAPONS_FACING  (-3.1415927f * 0.5f)
 
 int main(void)
 {
@@ -106,25 +109,31 @@ int main(void)
         joypad_poll();
         joypad_inputs_t inputs = joypad_get_inputs(JOYPAD_PORT_1);
 
-        // Run the panel update first so we know whether it has captured input
-        // (player is steering the ship rather than walking around).
+        // Run station updates. The player can be at most one of these at a
+        // time; the consoles are in different rooms.
         bool piloting = bridge_panel_update(panel,
             hero->position.v[0], hero->position.v[2], inputs);
+        bool gunning  = false;
 
-        // Weapons console: independent of bridge panel. While in range,
-        // a B press fires a projectile from the ship in the corner
-        // viewport. The console suppresses input by occupying B for the
-        // gunner, so we only let the bridge panel see B when the player
-        // ISN'T at the gunner station (handled implicitly via separate
-        // interaction radii — they're physically apart).
-        weapons_console_update(weapons,
-            hero->position.v[0], hero->position.v[2], inputs);
-        if (weapons_console_consume_fire(weapons)) {
-            ship_view_fire(ship);
+        if (!piloting) {
+            gunning = weapons_console_update(weapons,
+                hero->position.v[0], hero->position.v[2], inputs);
+            if (weapons_console_consume_phaser(weapons))
+                ship_view_fire(ship, PROJ_PHASER,  weapons->aim_yaw);
+            if (weapons_console_consume_torpedo(weapons))
+                ship_view_fire(ship, PROJ_TORPEDO, weapons->aim_yaw);
+        } else {
+            // Keep edge-detect state coherent so the next post-piloting press
+            // still fires correctly.
+            weapons->prev_a = inputs.btn.a != 0;
+            weapons->prev_b = inputs.btn.b != 0;
+            weapons->prev_z = inputs.btn.z != 0;
+            weapons->player_in_range = false;
         }
 
+        bool stationed = piloting || gunning;
         float speed = 0.0f;
-        if (!piloting) {
+        if (!stationed) {
             // Camera sits at (+X, +Y, +Z) looking at the origin, so its forward
             // vector projected onto XZ is (-k, -k) and its right vector is
             // (+k, -k), where k = √2/2. Map the stick into those basis vectors
@@ -195,13 +204,26 @@ int main(void)
 
         rdpq_sync_pipe();
         rdpq_set_mode_standard();
-        rdpq_text_print(NULL, 1, 100, 20, "STAR CREW 64");
-        if (panel->player_in_range) {
-            rdpq_text_print(NULL, 1, 80, 220,
-                            piloting ? "[A] LEAVE HELM   [B] IMPULSE"
-                                     : "[A] TAKE THE HELM");
+
+        // Console UI: two states per station.
+        //   in range, not active  → "Press A to <verb>"
+        //   active                → controls reference, plus "B to leave"
+        // Active prompts get two stacked lines so the layout fits the screen
+        // even with the verbose control list.
+        if (piloting) {
+            rdpq_text_print(NULL, 1, 14, 210,
+                            "STICK: turn / forward / reverse");
+            rdpq_text_print(NULL, 1, 14, 224,
+                            "[B] LEAVE HELM");
+        } else if (gunning) {
+            rdpq_text_print(NULL, 1, 14, 210,
+                            "STICK: aim   [A] PHASER   [Z] TORPEDO");
+            rdpq_text_print(NULL, 1, 14, 224,
+                            "[B] LEAVE GUNNER STATION");
+        } else if (panel->player_in_range) {
+            rdpq_text_print(NULL, 1, 60, 222, "[A] TAKE THE HELM");
         } else if (weapons->player_in_range) {
-            rdpq_text_print(NULL, 1, 80, 220, "[B] FIRE");
+            rdpq_text_print(NULL, 1, 60, 222, "[A] MAN WEAPONS");
         }
 
         rdpq_detach_show();

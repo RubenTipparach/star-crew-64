@@ -18,12 +18,15 @@ typedef struct {
     bool           player_active; // true while the player is actively steering from this panel
 
     // Steering state — produced by panel input, consumed by the ship view.
-    // steer is in [-1, +1] (left/right). impulse is in [0, 1].
+    // steer is in [-1, +1] (left = -1, right = +1).
+    // impulse is in [-1, +1] (back = -1, forward = +1).
     float          steer;
     float          impulse;
 
-    // Edge-detect for the activate/deactivate button (A).
+    // Edge-detect: A enters the helm (when in range, not active);
+    // B leaves the helm (when active).
     bool           prev_a;
+    bool           prev_b;
 } BridgePanel;
 
 // Build geometry, load texture, place the panel at (x, z) facing +Z by default.

@@ -3,8 +3,11 @@
 
 #include "bridge_panel.h"
 
-// Distance (world units) at which the player can activate the panel.
-#define PANEL_INTERACT_RADIUS 22.0f
+// Distance (world units) at which the player can activate the panel. Tuned
+// to be generous enough that the player doesn't have to be stood pixel-perfect
+// next to the console — a tile is 20 units wide and the character ~16 tall,
+// so 35 means "anywhere within ~1.5 tiles of the console".
+#define PANEL_INTERACT_RADIUS 35.0f
 
 // Smoothing for steering / impulse — input lerps toward target so the ship
 // doesn't snap.
@@ -63,6 +66,7 @@ BridgePanel* bridge_panel_create(float x, float z, float facing_yaw)
     p->steer   = 0.0f;
     p->impulse = 0.0f;
     p->prev_a  = false;
+    p->prev_b  = false;
 
     p->texture = sprite_load("rom:/bridge_panel.sprite");
     p->verts   = malloc_uncached(sizeof(T3DVertPacked) * BRIDGE_PANEL_NUM_TRIS * 2);
@@ -87,25 +91,36 @@ bool bridge_panel_update(BridgePanel *p, float player_x, float player_z,
     float d2 = dx * dx + dz * dz;
     p->player_in_range = (d2 <= PANEL_INTERACT_RADIUS * PANEL_INTERACT_RADIUS);
 
-    // Edge-detect A: toggle "active" while in range; force-exit if the player
-    // walks out of range.
+    // Edge-detect A and B.
+    // A: enter the helm (only when in range and not already active).
+    // B: leave the helm (only when active). Force-exit if the player walks out
+    //    of range so they can't get stuck "piloting" while disconnected.
     bool a_now = inputs.btn.a != 0;
+    bool b_now = inputs.btn.b != 0;
     bool a_pressed = a_now && !p->prev_a;
+    bool b_pressed = b_now && !p->prev_b;
     p->prev_a = a_now;
+    p->prev_b = b_now;
 
-    if (p->player_in_range && a_pressed) {
-        p->player_active = !p->player_active;
+    if (!p->player_active && p->player_in_range && a_pressed) {
+        p->player_active = true;
+    }
+    if (p->player_active && b_pressed) {
+        p->player_active = false;
     }
     if (!p->player_in_range) {
         p->player_active = false;
     }
 
     if (p->player_active) {
-        // Steer with stick X, impulse held while B is down.
+        // Stick X turns the ship; stick Y drives forward (+) / backward (-).
+        // Both clamp to [-1,+1] before lerping into the smoothed control state.
         float target_steer   = (float)inputs.stick_x / STICK_DIVISOR;
-        if (target_steer < -1.0f) target_steer = -1.0f;
-        if (target_steer >  1.0f) target_steer =  1.0f;
-        float target_impulse = inputs.btn.b ? 1.0f : 0.0f;
+        float target_impulse = (float)inputs.stick_y / STICK_DIVISOR;
+        if (target_steer < -1.0f)   target_steer   = -1.0f;
+        if (target_steer >  1.0f)   target_steer   =  1.0f;
+        if (target_impulse < -1.0f) target_impulse = -1.0f;
+        if (target_impulse >  1.0f) target_impulse =  1.0f;
         p->steer   += (target_steer   - p->steer)   * STEER_LERP;
         p->impulse += (target_impulse - p->impulse) * IMPULSE_LERP;
     } else {

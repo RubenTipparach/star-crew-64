@@ -7,7 +7,10 @@
 // the stars comfortably outside the hull.
 #define STAR_R_MIN    300.0f
 #define STAR_R_MAX    700.0f
-#define STAR_QUAD_SZ  6       // world units per star quad (small → dots on screen)
+#define STAR_QUAD_SZ  16      // world units per star quad — at radius 300..700
+                              // and FOV 50° this lands each quad at ~7-15 px on
+                              // screen, big enough that the 1-px bright core
+                              // and 4-px halo actually read after CI4 sampling.
 
 static Stars stars_instance = {0};
 

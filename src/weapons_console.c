@@ -4,13 +4,19 @@
 #include "weapons_console.h"
 
 // Distance (world units) at which the player can interact with the console.
-// Slightly tighter than the bridge panel's 22 — a gunner needs to be right
-// at the station.
-#define WEAPONS_INTERACT_RADIUS 20.0f
+// Matches the bridge panel's radius so both stations feel equally forgiving.
+#define WEAPONS_INTERACT_RADIUS 35.0f
 
-// Cooldown between shots (frames @ ~60Hz). 18 → ~3 shots/sec, fast enough
-// to feel responsive without filling the projectile pool instantly.
-#define WEAPONS_COOLDOWN_FRAMES 18
+// Cooldowns per weapon (frames @ ~60Hz). Phasers are the rapid primary;
+// torpedoes are heavy and slow.
+#define PHASER_COOLDOWN_FRAMES   12     // ~5 shots/sec
+#define TORPEDO_COOLDOWN_FRAMES  45     // ~1.3 shots/sec
+
+// Aim adjustment rate while at the gunner seat. Stick fully over rotates the
+// aim by AIM_RATE radians per frame; clamped to +/- AIM_LIMIT off the ship's
+// forward so the gunner can't shoot directly behind.
+#define AIM_RATE   0.045f
+#define AIM_LIMIT  1.0472f      // 60° each way
 
 static WeaponsConsole console_instance = {0};
 
@@ -56,9 +62,15 @@ WeaponsConsole* weapons_console_create(float x, float z, float facing_yaw)
     w->position = (T3DVec3){{x, 0.0f, z}};
     w->rot_y = facing_yaw;
     w->player_in_range = false;
+    w->player_active   = false;
+    w->prev_a = false;
     w->prev_b = false;
-    w->fire_requested = false;
-    w->cooldown = 0;
+    w->prev_z = false;
+    w->aim_yaw = 0.0f;
+    w->fire_phaser_requested  = false;
+    w->fire_torpedo_requested = false;
+    w->phaser_cooldown  = 0;
+    w->torpedo_cooldown = 0;
 
     w->texture = sprite_load("rom:/weapons_panel.sprite");
     w->verts   = malloc_uncached(sizeof(T3DVertPacked) * WEAPONS_PANEL_NUM_TRIS * 2);
@@ -75,7 +87,7 @@ WeaponsConsole* weapons_console_create(float x, float z, float facing_yaw)
     return w;
 }
 
-void weapons_console_update(WeaponsConsole *w, float player_x, float player_z,
+bool weapons_console_update(WeaponsConsole *w, float player_x, float player_z,
                             joypad_inputs_t inputs)
 {
     float dx = player_x - w->position.v[0];
@@ -83,24 +95,74 @@ void weapons_console_update(WeaponsConsole *w, float player_x, float player_z,
     float d2 = dx * dx + dz * dz;
     w->player_in_range = (d2 <= WEAPONS_INTERACT_RADIUS * WEAPONS_INTERACT_RADIUS);
 
-    if (w->cooldown > 0) {
-        w->cooldown--;
-    }
-
+    bool a_now = inputs.btn.a != 0;
     bool b_now = inputs.btn.b != 0;
+    bool z_now = inputs.btn.z != 0;
+    bool a_pressed = a_now && !w->prev_a;
     bool b_pressed = b_now && !w->prev_b;
+    bool z_pressed = z_now && !w->prev_z;
+    w->prev_a = a_now;
     w->prev_b = b_now;
+    w->prev_z = z_now;
 
-    if (w->player_in_range && b_pressed && w->cooldown == 0) {
-        w->fire_requested = true;
-        w->cooldown = WEAPONS_COOLDOWN_FRAMES;
+    // ENTER: A while in range and not active. Consume the press so the same
+    // frame doesn't immediately fire a phaser through the active branch below.
+    if (!w->player_active && w->player_in_range && a_pressed) {
+        w->player_active = true;
+        w->aim_yaw = 0.0f;
+        w->phaser_cooldown  = 0;
+        w->torpedo_cooldown = 0;
+        a_pressed = false;
     }
+    // LEAVE: B while active. Don't fall through to fire logic on the same
+    // frame either.
+    if (w->player_active && b_pressed) {
+        w->player_active = false;
+        return false;
+    }
+    // Force-exit if the player walks out of range.
+    if (!w->player_in_range) {
+        w->player_active = false;
+    }
+
+    if (w->player_active) {
+        // Stick X drives the aim cone. Decay slowly back toward zero when
+        // the stick is centered so the gunner doesn't have to fight drift.
+        float sx = (float)inputs.stick_x / STICK_DIVISOR;
+        if (sx < -1.0f) sx = -1.0f;
+        if (sx >  1.0f) sx =  1.0f;
+        w->aim_yaw += sx * AIM_RATE;
+        if (fabsf(sx) < 0.05f) w->aim_yaw *= 0.97f;
+        if (w->aim_yaw < -AIM_LIMIT) w->aim_yaw = -AIM_LIMIT;
+        if (w->aim_yaw >  AIM_LIMIT) w->aim_yaw =  AIM_LIMIT;
+
+        if (w->phaser_cooldown > 0)  w->phaser_cooldown--;
+        if (w->torpedo_cooldown > 0) w->torpedo_cooldown--;
+
+        if (a_pressed && w->phaser_cooldown == 0) {
+            w->fire_phaser_requested = true;
+            w->phaser_cooldown = PHASER_COOLDOWN_FRAMES;
+        }
+        if (z_pressed && w->torpedo_cooldown == 0) {
+            w->fire_torpedo_requested = true;
+            w->torpedo_cooldown = TORPEDO_COOLDOWN_FRAMES;
+        }
+    }
+
+    return w->player_active;
 }
 
-bool weapons_console_consume_fire(WeaponsConsole *w)
+bool weapons_console_consume_phaser(WeaponsConsole *w)
 {
-    bool fired = w->fire_requested;
-    w->fire_requested = false;
+    bool fired = w->fire_phaser_requested;
+    w->fire_phaser_requested = false;
+    return fired;
+}
+
+bool weapons_console_consume_torpedo(WeaponsConsole *w)
+{
+    bool fired = w->fire_torpedo_requested;
+    w->fire_torpedo_requested = false;
     return fired;
 }
 

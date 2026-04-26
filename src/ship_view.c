@@ -2,7 +2,6 @@
 #include <stdlib.h>
 
 #include "ship_view.h"
-#include "ship_idle_anim.h"
 #include "meshes.h"  // mesh_create_laser_cube + mesh_draw_cube — shared projectile mesh
 
 // Camera distance for the corner viewport. The ship is small, so we frame it
@@ -20,18 +19,15 @@
 #define SHIP_DAMP        0.985f  // friction multiplier per frame
 #define SHIP_MAX_SPEED   1.5f
 
-// Forward drift applied while idle so we visibly "fly through" the
-// star field (otherwise the camera stays fixed on the ship and the
-// scene reads as static).
-#define IDLE_DRIFT_VEL   0.5f    // world units / frame
-
 // Star scatter — a long box ahead of and behind the camera so stars wrap as
 // the ship drifts forward. Z range chosen so even at SV_FAR the far end is
 // inside the frustum.
 #define STAR_BOX_X_HALF   180.0f
 #define STAR_BOX_Y_HALF    90.0f
 #define STAR_BOX_Z_HALF   180.0f
-#define STAR_QUAD_HALF      4    // local-space half-extent of each star quad
+#define STAR_QUAD_HALF      7    // local-space half-extent of each star quad
+                                 // (~14 units across; enlarged so stars still
+                                 // read at the bigger 120x90 viewport size)
 
 static ShipView sv_instance = {0};
 
@@ -147,7 +143,7 @@ ShipView* ship_view_create(void)
 
     // Type distribution: heavy white, smaller helping of accents (matches
     // stars.c so the two scenes look like the same galactic neighborhood).
-    const int per_type[SHIP_VIEW_STAR_TYPES] = {14, 5, 3, 2};  // sums to 24
+    const int per_type[SHIP_VIEW_STAR_TYPES] = {48, 18, 10, 4};  // sums to 80
     int idx = 0;
     for (int t = 0; t < SHIP_VIEW_STAR_TYPES; t++) {
         for (int i = 0; i < per_type[t]; i++) {
@@ -160,29 +156,6 @@ ShipView* ship_view_create(void)
     }
 
     return sv;
-}
-
-// Sample SHIP_IDLE_KEYFRAMES at fractional frame `f` (linearly interpolating
-// between the floor + ceil frames for smoothness). Wraps modulo NUM_FRAMES
-// since the clip loops.
-static void sample_idle(float f, float *px, float *py, float *pz,
-                        float *pitch, float *yaw, float *roll)
-{
-    if (f < 0.0f) f = 0.0f;
-    int n = SHIP_IDLE_NUM_FRAMES;
-    int i0 = ((int)f) % n;
-    int i1 = (i0 + 1) % n;
-    float t = f - (float)((int)f);
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    const float *a = SHIP_IDLE_KEYFRAMES[i0];
-    const float *b = SHIP_IDLE_KEYFRAMES[i1];
-    *px    = a[0] + (b[0] - a[0]) * t;
-    *py    = a[1] + (b[1] - a[1]) * t;
-    *pz    = a[2] + (b[2] - a[2]) * t;
-    *pitch = a[3] + (b[3] - a[3]) * t;
-    *yaw   = a[4] + (b[4] - a[4]) * t;
-    *roll  = a[5] + (b[5] - a[5]) * t;
 }
 
 void ship_view_update(ShipView *sv, int frameIdx,
@@ -204,36 +177,30 @@ void ship_view_update(ShipView *sv, int frameIdx,
         sv->z += cosf(sv->yaw) * sv->vel;
         roll = -steer * 0.25f;  // bank into turns
     } else {
-        // Idle: baked clip drives bob/sway/wobble; we layer constant forward
-        // drift on top so the camera advances through the star field.
-        sv->anim_frame += 1.0f;
-        if (sv->anim_frame >= (float)SHIP_IDLE_NUM_FRAMES) {
-            sv->anim_frame -= (float)SHIP_IDLE_NUM_FRAMES;
-        }
-        float fx, fy, fz, fpitch, fyaw, froll;
-        sample_idle(sv->anim_frame, &fx, &fy, &fz, &fpitch, &fyaw, &froll);
-        // Anim is in local "drift space"; multiply by ~14 to match the ship's
-        // world scale (see gen-ship-c.py).
-        const float A = 14.0f;
-        sv->drift_z += IDLE_DRIFT_VEL;
-        sv->x = fx * A;
-        sv->y = fy * A;
-        sv->z = sv->drift_z + fz * A;
-        sv->yaw = fyaw;   // baked clip yaw is 0
-        pitch   = fpitch;
-        roll    = froll;
+        // Idle: ship sits stationary until someone takes the helm. No drift,
+        // no bob — the baked clip + IDLE_DRIFT_VEL path is gone. Star
+        // recycling still runs each frame but lands stars at the same z=0
+        // shell, so the field stays put too.
+        sv->x = 0.0f;
+        sv->y = 0.0f;
+        sv->z = 0.0f;
+        sv->yaw = 0.0f;
         sv->vel = 0.0f;
+        pitch = 0.0f;
+        roll  = 0.0f;
     }
 
-    // Cycle one star per frame to a fresh spot ahead of the ship — keeps
-    // the field "infinite" without needing thousands of stars or a per-frame
-    // bounds-check loop. With SHIP_VIEW_STAR_COUNT=24 the whole field
-    // refreshes about every 24 frames (~0.4s), fast enough that the player
-    // never sees an empty pocket.
-    static int next_recycle = 0;
-    place_star(&sv->star_matrices[next_recycle],
-               sv->z + STAR_BOX_Z_HALF);
-    next_recycle = (next_recycle + 1) % SHIP_VIEW_STAR_COUNT;
+    // Cycle one star per frame to a fresh spot ahead of the ship — keeps the
+    // field "infinite" while moving without needing thousands of stars or a
+    // bounds-check loop. Skip while idle: the recycle would otherwise migrate
+    // every star forward of the ship over SHIP_VIEW_STAR_COUNT frames, even
+    // though sv->z isn't changing.
+    if (fabsf(sv->vel) > 0.001f) {
+        static int next_recycle = 0;
+        place_star(&sv->star_matrices[next_recycle],
+                   sv->z + STAR_BOX_Z_HALF);
+        next_recycle = (next_recycle + 1) % SHIP_VIEW_STAR_COUNT;
+    }
 
     t3d_mat4fp_from_srt_euler(&sv->matrices[frameIdx],
         (float[3]){1.0f, 1.0f, 1.0f},
@@ -253,7 +220,7 @@ void ship_view_update(ShipView *sv, int frameIdx,
     }
 }
 
-void ship_view_fire(ShipView *sv)
+void ship_view_fire(ShipView *sv, ProjectileType type, float aim_yaw_offset)
 {
     // Find a free slot.
     int slot = -1;
@@ -262,29 +229,41 @@ void ship_view_fire(ShipView *sv)
     }
     if (slot < 0) return;
 
-    ShipProjectile *p = &sv->projectiles[slot];
-    // Forward direction: ship's yaw determines the heading, nose at +Z.
-    float fx = sinf(sv->yaw);
-    float fz = cosf(sv->yaw);
-    // Spawn a short distance ahead of the hull so the projectile clears
-    // the model on its first frame.
+    // Direction = ship heading + gunner's aim offset. Nose is +Z at yaw=0.
+    float yaw = sv->yaw + aim_yaw_offset;
+    float fx = sinf(yaw);
+    float fz = cosf(yaw);
+    // Spawn a short distance ahead of the hull along the SHIP heading (not
+    // the aim direction) so torpedoes/phasers always emerge from the nose.
     const float NOSE_OFFSET = 12.0f;
-    p->x = sv->x + fx * NOSE_OFFSET;
+    float nx = sinf(sv->yaw);
+    float nz = cosf(sv->yaw);
+
+    float speed    = (type == PROJ_TORPEDO) ? TORPEDO_SPEED    : PHASER_SPEED;
+    int   lifetime = (type == PROJ_TORPEDO) ? TORPEDO_LIFETIME : PHASER_LIFETIME;
+
+    ShipProjectile *p = &sv->projectiles[slot];
+    p->x = sv->x + nx * NOSE_OFFSET;
     p->y = sv->y + 1.5f;
-    p->z = sv->z + fz * NOSE_OFFSET;
-    p->vx = fx * SHIP_VIEW_PROJ_SPEED;
+    p->z = sv->z + nz * NOSE_OFFSET;
+    p->vx = fx * speed;
     p->vy = 0.0f;
-    p->vz = fz * SHIP_VIEW_PROJ_SPEED;
-    p->timer = SHIP_VIEW_PROJ_LIFETIME;
+    p->vz = fz * speed;
+    p->timer = lifetime;
+    p->type = type;
 }
 
 void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
 {
-    // Camera that follows the ship from behind, in the ship's local frame
-    // (rotated by yaw so we always see the back of the hull).
-    float cx = sv->x - sinf(sv->yaw) * SV_CAM_OFF_Z;
-    float cz = sv->z - cosf(sv->yaw) * SV_CAM_OFF_Z;
-    T3DVec3 cam_pos = {{cx, sv->y + SV_CAM_OFF_Y, cz}};
+    // World-fixed chase camera: follows the ship's POSITION but not its yaw.
+    // When the player turns, the ship visibly rotates against the static
+    // camera (and the surrounding starfield) instead of the camera spinning
+    // with the hull and erasing the visual feedback.
+    T3DVec3 cam_pos = {{
+        sv->x,
+        sv->y + SV_CAM_OFF_Y,
+        sv->z + SV_CAM_OFF_Z,    // SV_CAM_OFF_Z is negative — camera trails in world -Z
+    }};
     T3DVec3 cam_tgt = {{sv->x, sv->y, sv->z}};
     T3DVec3 cam_up  = {{0, 1, 0}};
 
@@ -369,17 +348,26 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     }
     t3d_matrix_pop(1);
 
-    // ---- Projectiles: tiny unlit yellow cubes, depth-tested.
+    // ---- Projectiles: tiny unlit cubes, depth-tested. Colour + scale per
+    // type so phasers (yellow, small, fast) are visually distinct from
+    // photon torpedoes (cyan, larger, slow).
     rdpq_sync_pipe();
     rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-    rdpq_set_prim_color(RGBA32(255, 230, 100, 255));
     t3d_state_set_drawflags(T3D_FLAG_DEPTH);
     for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
         ShipProjectile *p = &sv->projectiles[i];
         if (p->timer <= 0) continue;
+
+        if (p->type == PROJ_TORPEDO) {
+            rdpq_set_prim_color(RGBA32(120, 220, 255, 255));   // bright cyan
+        } else {
+            rdpq_set_prim_color(RGBA32(255, 230, 100, 255));   // hot yellow
+        }
+        float scale = (p->type == PROJ_TORPEDO) ? 1.7f : 1.0f;
+
         int matIdx = frameIdx * SHIP_VIEW_PROJECTILES + i;
         t3d_mat4fp_from_srt_euler(&sv->proj_matrices[matIdx],
-            (float[3]){1.0f, 1.0f, 1.0f},
+            (float[3]){scale, scale, scale},
             (float[3]){0.0f, 0.0f, 0.0f},
             (float[3]){p->x, p->y, p->z}
         );
@@ -394,4 +382,19 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     if (main_viewport) {
         t3d_viewport_attach(main_viewport);
     }
+
+    // Draw a 2-px steel-blue frame around the corner viewport. Done in fill
+    // mode (2D), independent of the t3d viewport. Four rectangles forming a
+    // hollow ring; the inner viewport content is already committed.
+    rdpq_sync_pipe();
+    rdpq_set_mode_fill(RGBA32(160, 180, 210, 255));
+    const int B = 2;
+    int x0 = SHIP_VIEW_X - B;
+    int y0 = SHIP_VIEW_Y - B;
+    int x1 = SHIP_VIEW_X + SHIP_VIEW_WIDTH  + B;
+    int y1 = SHIP_VIEW_Y + SHIP_VIEW_HEIGHT + B;
+    rdpq_fill_rectangle(x0,     y0,     x1,     y0 + B);   // top
+    rdpq_fill_rectangle(x0,     y1 - B, x1,     y1);       // bottom
+    rdpq_fill_rectangle(x0,     y0 + B, x0 + B, y1 - B);   // left
+    rdpq_fill_rectangle(x1 - B, y0 + B, x1,     y1 - B);   // right
 }

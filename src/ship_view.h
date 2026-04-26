@@ -4,30 +4,39 @@
 #include "game_config.h"
 #include "ship_model.h"
 
-// Pixel size + position of the corner overlay (top-right) — 1/4 of a 320x240
-// frame ≈ 80x60. Constants live in the header so main.c can reason about them.
-#define SHIP_VIEW_WIDTH    80
-#define SHIP_VIEW_HEIGHT   60
+// Pixel size + position of the corner overlay (top-right). 50% larger than
+// the original 80x60 (still 4:3) — fits the 320x240 frame with a 4px inset.
+#define SHIP_VIEW_WIDTH    120
+#define SHIP_VIEW_HEIGHT   90
 #define SHIP_VIEW_X        (320 - SHIP_VIEW_WIDTH - 4)   // small inset from the screen edge
 #define SHIP_VIEW_Y        4
 
 // Number of background star billboards scattered around the corner-viewport
 // camera. Each is a cool-stuff star_*.png sprite drawn as a small quad — the
-// same approach src/stars.c uses for the bridge-exterior starfield. Scale is
-// tuned so each star reads as a clear 2-3px dot at the 80×60 corner size.
-#define SHIP_VIEW_STAR_COUNT  24
+// same approach src/stars.c uses for the bridge-exterior starfield. Bumped
+// to 80 to give the 120×90 viewport a properly dense field.
+#define SHIP_VIEW_STAR_COUNT  80
 #define SHIP_VIEW_STAR_TYPES   4
 
-// Projectile pool size. Each projectile is a tiny unlit yellow cube emitted
-// from the ship's nose by the weapons console. Lifetime + speed below.
-#define SHIP_VIEW_PROJECTILES  6
-#define SHIP_VIEW_PROJ_LIFETIME 90       // ~1.5s @ 60Hz
-#define SHIP_VIEW_PROJ_SPEED    3.0f     // world units / frame
+// Projectile pool: shared between phasers (rapid yellow) and photon torpedoes
+// (slow blue). Pool is intentionally small — N64 fillrate hates many alpha
+// quads, and the gameplay doesn't need swarm fire.
+#define SHIP_VIEW_PROJECTILES   8
+#define PHASER_LIFETIME         60       // ~1s @ 60Hz, fast & short-lived
+#define PHASER_SPEED            4.0f
+#define TORPEDO_LIFETIME        150      // ~2.5s, drifts further before fading
+#define TORPEDO_SPEED           1.8f
+
+typedef enum {
+    PROJ_PHASER  = 0,
+    PROJ_TORPEDO = 1,
+} ProjectileType;
 
 typedef struct {
-    float    x, y, z;
-    float    vx, vy, vz;
-    int      timer;        // remaining frames; <=0 means inactive
+    float          x, y, z;
+    float          vx, vy, vz;
+    int            timer;        // remaining frames; <=0 means inactive
+    ProjectileType type;
 } ShipProjectile;
 
 typedef struct {
@@ -72,9 +81,11 @@ ShipView* ship_view_create(void);
 void ship_view_update(ShipView *sv, int frameIdx,
                       bool pilot_active, float steer, float impulse);
 
-// Spawn a projectile from the ship's nose, traveling along the ship's
-// current forward direction. No-op if the pool is full.
-void ship_view_fire(ShipView *sv);
+// Spawn a projectile from the ship's nose. `aim_yaw_offset` is added to the
+// ship's heading so the gunner can shoot off-axis from where the ship is
+// pointed. Phaser vs. torpedo controls speed / lifetime / draw color. No-op
+// if the pool is full.
+void ship_view_fire(ShipView *sv, ProjectileType type, float aim_yaw_offset);
 
 // Draw the ship + starfield into the corner of the current framebuffer. Must
 // be called *after* the main scene has been rendered for this frame; this
