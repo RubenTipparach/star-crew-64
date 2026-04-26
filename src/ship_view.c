@@ -11,8 +11,8 @@
 #define SV_FOV_DEG  55.0f
 #define SV_NEAR     5.0f
 #define SV_FAR      400.0f
-#define SV_CAM_OFF_Y  18.0f
-#define SV_CAM_OFF_Z  -28.0f   // behind the ship (camera sits at ship.z - this)
+#define SV_CAM_OFF_Y  32.0f
+#define SV_CAM_OFF_Z  -52.0f   // behind the ship (camera sits at ship.z - this)
 
 // Pilot-driven motion tuning.
 #define SHIP_TURN_RATE   0.02f   // radians per frame at full stick

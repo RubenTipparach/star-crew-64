@@ -5,9 +5,9 @@
 // Shell geometry: stars are scattered between these two radii. The ship's
 // bounding radius is roughly 300 (30 tiles × 20 units / 2), so 350..500 puts
 // the stars comfortably outside the hull.
-#define STAR_R_MIN    350.0f
-#define STAR_R_MAX    500.0f
-#define STAR_QUAD_SZ  4       // world units per star quad (small → dots on screen)
+#define STAR_R_MIN    300.0f
+#define STAR_R_MAX    700.0f
+#define STAR_QUAD_SZ  6       // world units per star quad (small → dots on screen)
 
 static Stars stars_instance = {0};
 
@@ -61,7 +61,7 @@ Stars* stars_create(void)
     // lay the types out sorted so draw() can group sprite uploads without a
     // separate sort pass.
     int idx = 0;
-    const int per_type[STAR_TYPE_COUNT] = {30, 14, 10, 6};  // sums to 60
+    const int per_type[STAR_TYPE_COUNT] = {90, 38, 22, 10};  // sums to 160
     for (int t = 0; t < STAR_TYPE_COUNT; t++) {
         for (int i = 0; i < per_type[t]; i++) {
             s->tex_indices[idx++] = (uint8_t)t;

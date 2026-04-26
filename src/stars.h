@@ -11,7 +11,7 @@
 // 3/4 camera renders them as tiny dots — the "billboard" look falls out for
 // free without having to re-orient per frame.
 #define STAR_TYPE_COUNT 4
-#define STAR_COUNT      60
+#define STAR_COUNT      160
 
 typedef struct {
     T3DVertPacked *quad;                          // small 4×4-unit quad (shared)

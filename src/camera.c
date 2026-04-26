@@ -10,7 +10,7 @@
 // reads as a smaller figure in the lower part of the frame.
 #define CAMERA_FOV_DEG   55.0f
 #define CAMERA_NEAR      10.0f
-#define CAMERA_FAR       900.0f   // must comfortably exceed STAR_R_MAX (500) + camera offset (~105)
+#define CAMERA_FAR       1300.0f  // must comfortably exceed STAR_R_MAX (700) + camera offset (~250)
 
 // Offset from the look-at point to the camera position. Y is the up axis;
 // pulling X/Y/Z proportionally further out zooms the view.
