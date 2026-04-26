@@ -1,17 +1,17 @@
 #include <math.h>
 
 #include "character.h"
+#include "character_walk_anim.h"  // baked walk-cycle keyframes (CLAUDE.md guideline)
 
 // The model is authored so that, after t3d's Y-rotation convention, the nose
 // ends up 90° off from the control code's rot_y. Add π/2 at matrix build
 // time so main.c can keep using rot_y = atan2f(dx, dz) cleanly.
 #define CHARACTER_YAW_OFFSET 3.1415927f  // π (model faces +Z, needs 180° flip)
 
-// Walk cycle tuning. Amplitudes match Caelum's reference char-editor
-// (~30° legs, ~25° arms, counter-phase).
+// Walk cycle tuning. Phase advance + ease-out are procedural; the actual
+// per-bone pitch values come from the baked character_walk clip (see
+// tools/gen-character-anim.py).
 #define WALK_PHASE_GAIN    0.25f  // phase radians advanced per world unit moved
-#define WALK_SWING_LEG     0.52f  // peak leg swing amplitude (radians, ~30°)
-#define WALK_SWING_ARM     0.44f  // peak arm swing amplitude (radians, ~25°)
 #define WALK_EASE_OUT      0.12f  // per-frame decay when not moving
 
 // Part indices — must match the order of PARTS in tools/gen-character.py.
@@ -53,7 +53,11 @@ static const int16_t PART_UV_V1[CHARACTER_NUM_PARTS] = {
     UV(8), UV(8), UV(16), UV(24), UV(24), UV(32), UV(32),
 };
 
-static Character character_instance = {0};
+// Up to two players (one per controller). character_create() hands out the
+// next free slot — main.c calls it once per detected controller.
+#define MAX_CHARACTERS 2
+static Character character_slots[MAX_CHARACTERS] = {0};
+static int next_character_slot = 0;
 
 // Build the 12 T3DVertPacked (6 faces × 2) for one axis-aligned box part.
 // The caller passes the 8 corners laid out in the same order as box_verts()
@@ -135,7 +139,9 @@ static void build_part(T3DVertPacked *out, const int16_t corners[8][3],
 
 Character* character_create(void)
 {
-    Character *c = &character_instance;
+    assertf(next_character_slot < MAX_CHARACTERS,
+            "character_create: too many characters (max %d)", MAX_CHARACTERS);
+    Character *c = &character_slots[next_character_slot++];
     c->position = (T3DVec3){{0, 0, 0}};
     c->rot_y = 0.0f;
     c->walk_phase = 0.0f;
@@ -228,18 +234,32 @@ void character_update_matrix(Character *c, int frameIdx)
         (float[3]){c->position.v[0], c->position.v[1], c->position.v[2]}
     );
 
-    float s = sinf(c->walk_phase);
-    float leg_theta = s * WALK_SWING_LEG;
-    float arm_theta = -s * WALK_SWING_ARM;   // arms counter-swing legs
+    // Sample the baked walk clip at the current phase. Phase is in [0, 2π);
+    // map that onto the clip's frame index. We linearly interpolate between
+    // adjacent frames so the result is smooth even when phase advances
+    // between clip samples.
+    const float twoPi = 6.2831853f;
+    float frame_pos = (c->walk_phase / twoPi) * (float)CHARACTER_WALK_NUM_FRAMES;
+    if (frame_pos < 0.0f) frame_pos += (float)CHARACTER_WALK_NUM_FRAMES;
+    int   f0 = ((int)frame_pos) % CHARACTER_WALK_NUM_FRAMES;
+    int   f1 = (f0 + 1)         % CHARACTER_WALK_NUM_FRAMES;
+    float t  = frame_pos - (float)((int)frame_pos);
+    if (t < 0.0f) t = 0.0f;
+    const float *a = CHARACTER_WALK_KEYFRAMES[f0];
+    const float *b = CHARACTER_WALK_KEYFRAMES[f1];
+    float leg_l_theta = a[0] + (b[0] - a[0]) * t;
+    float leg_r_theta = a[1] + (b[1] - a[1]) * t;
+    float arm_l_theta = a[2] + (b[2] - a[2]) * t;
+    float arm_r_theta = a[3] + (b[3] - a[3]) * t;
 
     T3DMat4FP *pm = c->part_matrices + frameIdx * CHARACTER_NUM_PARTS;
     build_identity_matrix(&pm[IDX_HEAD]);
     build_identity_matrix(&pm[IDX_NOSE]);
     build_identity_matrix(&pm[IDX_TORSO]);
-    build_swing_matrix(&pm[IDX_ARM_L], ARM_PIVOT_Y,  arm_theta);
-    build_swing_matrix(&pm[IDX_ARM_R], ARM_PIVOT_Y, -arm_theta);
-    build_swing_matrix(&pm[IDX_LEG_L], LEG_PIVOT_Y,  leg_theta);
-    build_swing_matrix(&pm[IDX_LEG_R], LEG_PIVOT_Y, -leg_theta);
+    build_swing_matrix(&pm[IDX_ARM_L], ARM_PIVOT_Y, arm_l_theta);
+    build_swing_matrix(&pm[IDX_ARM_R], ARM_PIVOT_Y, arm_r_theta);
+    build_swing_matrix(&pm[IDX_LEG_L], LEG_PIVOT_Y, leg_l_theta);
+    build_swing_matrix(&pm[IDX_LEG_R], LEG_PIVOT_Y, leg_r_theta);
 }
 
 void character_draw(Character *c, int frameIdx)

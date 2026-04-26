@@ -1,0 +1,205 @@
+{
+  "name": "character_walk",
+  "fps": 60,
+  "loop": true,
+  "bones": [
+    "leg_l",
+    "leg_r",
+    "arm_l",
+    "arm_r"
+  ],
+  "frames": [
+    {
+      "leg_l_pitch": 0.0,
+      "leg_r_pitch": -0.0,
+      "arm_l_pitch": -0.0,
+      "arm_r_pitch": 0.0
+    },
+    {
+      "leg_l_pitch": 0.1014,
+      "leg_r_pitch": -0.1014,
+      "arm_l_pitch": -0.0858,
+      "arm_r_pitch": 0.0858
+    },
+    {
+      "leg_l_pitch": 0.199,
+      "leg_r_pitch": -0.199,
+      "arm_l_pitch": -0.1684,
+      "arm_r_pitch": 0.1684
+    },
+    {
+      "leg_l_pitch": 0.2889,
+      "leg_r_pitch": -0.2889,
+      "arm_l_pitch": -0.2445,
+      "arm_r_pitch": 0.2445
+    },
+    {
+      "leg_l_pitch": 0.3677,
+      "leg_r_pitch": -0.3677,
+      "arm_l_pitch": -0.3111,
+      "arm_r_pitch": 0.3111
+    },
+    {
+      "leg_l_pitch": 0.4324,
+      "leg_r_pitch": -0.4324,
+      "arm_l_pitch": -0.3658,
+      "arm_r_pitch": 0.3658
+    },
+    {
+      "leg_l_pitch": 0.4804,
+      "leg_r_pitch": -0.4804,
+      "arm_l_pitch": -0.4065,
+      "arm_r_pitch": 0.4065
+    },
+    {
+      "leg_l_pitch": 0.51,
+      "leg_r_pitch": -0.51,
+      "arm_l_pitch": -0.4315,
+      "arm_r_pitch": 0.4315
+    },
+    {
+      "leg_l_pitch": 0.52,
+      "leg_r_pitch": -0.52,
+      "arm_l_pitch": -0.44,
+      "arm_r_pitch": 0.44
+    },
+    {
+      "leg_l_pitch": 0.51,
+      "leg_r_pitch": -0.51,
+      "arm_l_pitch": -0.4315,
+      "arm_r_pitch": 0.4315
+    },
+    {
+      "leg_l_pitch": 0.4804,
+      "leg_r_pitch": -0.4804,
+      "arm_l_pitch": -0.4065,
+      "arm_r_pitch": 0.4065
+    },
+    {
+      "leg_l_pitch": 0.4324,
+      "leg_r_pitch": -0.4324,
+      "arm_l_pitch": -0.3658,
+      "arm_r_pitch": 0.3658
+    },
+    {
+      "leg_l_pitch": 0.3677,
+      "leg_r_pitch": -0.3677,
+      "arm_l_pitch": -0.3111,
+      "arm_r_pitch": 0.3111
+    },
+    {
+      "leg_l_pitch": 0.2889,
+      "leg_r_pitch": -0.2889,
+      "arm_l_pitch": -0.2445,
+      "arm_r_pitch": 0.2445
+    },
+    {
+      "leg_l_pitch": 0.199,
+      "leg_r_pitch": -0.199,
+      "arm_l_pitch": -0.1684,
+      "arm_r_pitch": 0.1684
+    },
+    {
+      "leg_l_pitch": 0.1014,
+      "leg_r_pitch": -0.1014,
+      "arm_l_pitch": -0.0858,
+      "arm_r_pitch": 0.0858
+    },
+    {
+      "leg_l_pitch": 0.0,
+      "leg_r_pitch": -0.0,
+      "arm_l_pitch": -0.0,
+      "arm_r_pitch": 0.0
+    },
+    {
+      "leg_l_pitch": -0.1014,
+      "leg_r_pitch": 0.1014,
+      "arm_l_pitch": 0.0858,
+      "arm_r_pitch": -0.0858
+    },
+    {
+      "leg_l_pitch": -0.199,
+      "leg_r_pitch": 0.199,
+      "arm_l_pitch": 0.1684,
+      "arm_r_pitch": -0.1684
+    },
+    {
+      "leg_l_pitch": -0.2889,
+      "leg_r_pitch": 0.2889,
+      "arm_l_pitch": 0.2445,
+      "arm_r_pitch": -0.2445
+    },
+    {
+      "leg_l_pitch": -0.3677,
+      "leg_r_pitch": 0.3677,
+      "arm_l_pitch": 0.3111,
+      "arm_r_pitch": -0.3111
+    },
+    {
+      "leg_l_pitch": -0.4324,
+      "leg_r_pitch": 0.4324,
+      "arm_l_pitch": 0.3658,
+      "arm_r_pitch": -0.3658
+    },
+    {
+      "leg_l_pitch": -0.4804,
+      "leg_r_pitch": 0.4804,
+      "arm_l_pitch": 0.4065,
+      "arm_r_pitch": -0.4065
+    },
+    {
+      "leg_l_pitch": -0.51,
+      "leg_r_pitch": 0.51,
+      "arm_l_pitch": 0.4315,
+      "arm_r_pitch": -0.4315
+    },
+    {
+      "leg_l_pitch": -0.52,
+      "leg_r_pitch": 0.52,
+      "arm_l_pitch": 0.44,
+      "arm_r_pitch": -0.44
+    },
+    {
+      "leg_l_pitch": -0.51,
+      "leg_r_pitch": 0.51,
+      "arm_l_pitch": 0.4315,
+      "arm_r_pitch": -0.4315
+    },
+    {
+      "leg_l_pitch": -0.4804,
+      "leg_r_pitch": 0.4804,
+      "arm_l_pitch": 0.4065,
+      "arm_r_pitch": -0.4065
+    },
+    {
+      "leg_l_pitch": -0.4324,
+      "leg_r_pitch": 0.4324,
+      "arm_l_pitch": 0.3658,
+      "arm_r_pitch": -0.3658
+    },
+    {
+      "leg_l_pitch": -0.3677,
+      "leg_r_pitch": 0.3677,
+      "arm_l_pitch": 0.3111,
+      "arm_r_pitch": -0.3111
+    },
+    {
+      "leg_l_pitch": -0.2889,
+      "leg_r_pitch": 0.2889,
+      "arm_l_pitch": 0.2445,
+      "arm_r_pitch": -0.2445
+    },
+    {
+      "leg_l_pitch": -0.199,
+      "leg_r_pitch": 0.199,
+      "arm_l_pitch": 0.1684,
+      "arm_r_pitch": -0.1684
+    },
+    {
+      "leg_l_pitch": -0.1014,
+      "leg_r_pitch": 0.1014,
+      "arm_l_pitch": 0.0858,
+      "arm_r_pitch": -0.0858
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,22 +40,105 @@ static inline void cell_to_world(int grid_w, int grid_h, int col, int row,
     *out_z = (row - (grid_h - 1) * 0.5f) * (float)TILE_SIZE;
 }
 
-// Read the full contents of a DFS file into a freshly malloc'd buffer. Caller
-// owns the buffer and must free() it. Returns NULL on failure.
-static uint8_t* dfs_read_all(const char *rom_path, int *out_size)
+// Build a wall-sized vertical quad in local space. Centered on X (so the
+// rotation around Y keeps the wall's centre fixed), standing on Y=0 rising to
+// Y=WALL_HEIGHT, facing +Z. UVs stretch the full 32×32 wall texture across:
+// V=0 at the floor edge (baseboard in the PNG), V=32 at the ceiling edge.
+static void build_wall_quad(T3DVertPacked *out)
 {
-    int fd = dfs_open(rom_path);
-    assertf(fd >= 0, "level_load: dfs_open('%s') failed (%d)", rom_path, fd);
-    int size = dfs_size(fd);
+    const int16_t S = TILE_SIZE;
+    const int16_t H = WALL_HEIGHT;
+    uint16_t nFront = t3d_vert_pack_normal(&(T3DVec3){{0, 0, 1}});
+    uint32_t white = 0xFFFFFFFF;
+    int16_t u0 = UV(0), u1 = UV(32);
+    int16_t v0 = UV(0), v1 = UV(32);
+
+    // v0 bottom-left, v1 bottom-right, v2 top-right, v3 top-left (CCW from +Z).
+    out[0] = (T3DVertPacked){
+        .posA = {-S/2, 0, 0}, .rgbaA = white, .normA = nFront, .stA = {u0, v0},
+        .posB = { S/2, 0, 0}, .rgbaB = white, .normB = nFront, .stB = {u1, v0},
+    };
+    out[1] = (T3DVertPacked){
+        .posA = { S/2, H, 0}, .rgbaA = white, .normA = nFront, .stA = {u1, v1},
+        .posB = {-S/2, H, 0}, .rgbaB = white, .normB = nFront, .stB = {u0, v1},
+    };
+}
+
+// Generate walls on the -X and -Z edges of every walkable cell whose matching
+// neighbour is TILE_NONE. Iterates once per target tile type so walls end up
+// grouped in the output array (keeps sprite uploads contiguous in draw()).
+static void build_walls(Level *lv)
+{
+    // First pass: count. Same predicate as the emit pass below so the two
+    // loops agree on the wall count.
+    int count = 0;
+    for (int r = 0; r < lv->grid_h; r++) {
+        for (int c = 0; c < lv->grid_w; c++) {
+            TileType t = lv->tiles[r * lv->grid_w + c];
+            if (t == TILE_NONE) continue;
+            if (level_tile_at(lv, c - 1, r) == TILE_NONE) count++;   // -X wall
+            if (level_tile_at(lv, c,     r - 1) == TILE_NONE) count++;   // -Z wall
+        }
+    }
+
+    lv->num_walls = count;
+    lv->walls = (count > 0) ? malloc_uncached(sizeof(Wall) * count) : NULL;
+
+    int idx = 0;
+    for (int pass_type = TILE_HALLWAY; pass_type <= TILE_AIRLOCK; pass_type++) {
+        for (int r = 0; r < lv->grid_h; r++) {
+            for (int c = 0; c < lv->grid_w; c++) {
+                TileType t = lv->tiles[r * lv->grid_w + c];
+                if (t != pass_type) continue;
+
+                float wx, wz;
+                cell_to_world(lv->grid_w, lv->grid_h, c, r, &wx, &wz);
+
+                // -X wall: rotate the +Z-facing base quad by +90° around Y so
+                // the normal points +X (into the cell), and sit it on the
+                // cell's western edge spanning the full Z extent.
+                if (level_tile_at(lv, c - 1, r) == TILE_NONE) {
+                    t3d_mat4fp_from_srt_euler(
+                        &lv->walls[idx].matrix,
+                        (float[3]){1.0f, 1.0f, 1.0f},
+                        (float[3]){0.0f, 1.5707963f, 0.0f},
+                        (float[3]){wx - (float)TILE_SIZE * 0.5f, 0.0f, wz}
+                    );
+                    lv->walls[idx].tile_type = (uint8_t)t;
+                    idx++;
+                }
+                // -Z wall: no rotation needed; base quad already faces +Z.
+                // Sit it on the cell's northern edge, centered on X.
+                if (level_tile_at(lv, c, r - 1) == TILE_NONE) {
+                    t3d_mat4fp_from_srt_euler(
+                        &lv->walls[idx].matrix,
+                        (float[3]){1.0f, 1.0f, 1.0f},
+                        (float[3]){0.0f, 0.0f, 0.0f},
+                        (float[3]){wx, 0.0f, wz - (float)TILE_SIZE * 0.5f}
+                    );
+                    lv->walls[idx].tile_type = (uint8_t)t;
+                    idx++;
+                }
+            }
+        }
+    }
+}
+
+// Read a file from the ROM filesystem into a freshly malloc'd buffer. Uses
+// asset_load() rather than dfs_open() because dfs_open() is the low-level
+// DragonFS API and does NOT handle the "rom:/" VFS prefix — it would look
+// for a file literally named "rom:/foo" and fail. asset_load() is the right
+// entry point for raw binary blobs that travel through the same path-alias
+// pipeline as sprite_load / fopen.
+static uint8_t* load_level_blob(const char *rom_path, int *out_size)
+{
+    int size = 0;
+    void *buf = asset_load(rom_path, &size);
+    assertf(buf != NULL, "level_load: asset_load('%s') failed", rom_path);
     assertf(size >= (int)sizeof(LevelHeader),
             "level_load: '%s' is %d bytes, too small for a header", rom_path, size);
-    uint8_t *buf = malloc((size_t)size);
-    assertf(buf != NULL, "level_load: out of memory reading '%s' (%d bytes)", rom_path, size);
-    int n = dfs_read(buf, 1, size, fd);
-    dfs_close(fd);
-    assertf(n == size, "level_load: short read on '%s' (%d of %d)", rom_path, n, size);
     *out_size = size;
-    return buf;
+    return (uint8_t*)buf;
 }
 
 Level* level_load(const char *rom_path)
@@ -62,7 +146,7 @@ Level* level_load(const char *rom_path)
     Level *lv = &level_instance;
 
     int size = 0;
-    uint8_t *buf = dfs_read_all(rom_path, &size);
+    uint8_t *buf = load_level_blob(rom_path, &size);
 
     // Header is big-endian on disk; N64 is MIPS big-endian so direct struct
     // reads match the file layout. (See comment in level_format.h.)
@@ -119,8 +203,18 @@ Level* level_load(const char *rom_path)
     lv->textures[TILE_ROOM]    = sprite_load("rom:/room.sprite");
     lv->textures[TILE_AIRLOCK] = sprite_load("rom:/airlock.sprite");
 
+    // Wall sprites. No dedicated airlock wall texture yet — fall back to the
+    // hallway wall so those cells still render rather than going untextured.
+    lv->wall_textures[TILE_NONE]    = NULL;
+    lv->wall_textures[TILE_HALLWAY] = sprite_load("rom:/hallway_wall.sprite");
+    lv->wall_textures[TILE_ROOM]    = sprite_load("rom:/room_wall.sprite");
+    lv->wall_textures[TILE_AIRLOCK] = lv->wall_textures[TILE_HALLWAY];
+
     lv->quad = malloc_uncached(sizeof(T3DVertPacked) * 2);
     build_quad(lv->quad);
+    lv->wall_quad = malloc_uncached(sizeof(T3DVertPacked) * 2);
+    build_wall_quad(lv->wall_quad);
+    build_walls(lv);
 
     // One matrix per cell position, allocated for the full grid (empty cells
     // keep an unused matrix slot — cheap and simplifies indexing).
@@ -173,6 +267,25 @@ void level_draw(Level *lv)
             t3d_matrix_pop(1);
         }
     }
+
+    // Walls — sorted by tile_type in build_walls, so the sprite upload only
+    // changes at type boundaries.
+    last = TILE_NONE;
+    for (int i = 0; i < lv->num_walls; i++) {
+        TileType wt = (TileType)lv->walls[i].tile_type;
+        if (wt != last) {
+            rdpq_sync_pipe();
+            rdpq_sync_tile();
+            rdpq_sprite_upload(TILE0, lv->wall_textures[wt], NULL);
+            last = wt;
+        }
+        t3d_matrix_push(&lv->walls[i].matrix);
+        t3d_vert_load(lv->wall_quad, 0, 4);
+        t3d_tri_draw(0, 1, 2);
+        t3d_tri_draw(0, 2, 3);
+        t3d_tri_sync();
+        t3d_matrix_pop(1);
+    }
 }
 
 void level_get_center(Level *lv, float *out_x, float *out_z)
@@ -187,4 +300,15 @@ TileType level_tile_at(const Level *lv, int col, int row)
     if (col < 0 || col >= lv->grid_w || row < 0 || row >= lv->grid_h)
         return TILE_NONE;
     return lv->tiles[row * lv->grid_w + col];
+}
+
+bool level_is_walkable(const Level *lv, float wx, float wz)
+{
+    // Inverse of cell_to_world: that function maps col → (col − (W−1)/2)·S,
+    // placing cell centres at odd half-integers in cell space. Each cell
+    // covers a half-open [centre−S/2, centre+S/2) interval, which floor()
+    // maps cleanly via `(wx/S + W/2)`.
+    int col = (int)floorf(wx / (float)TILE_SIZE + lv->grid_w * 0.5f);
+    int row = (int)floorf(wz / (float)TILE_SIZE + lv->grid_h * 0.5f);
+    return level_tile_at(lv, col, row) != TILE_NONE;
 }
