@@ -58,6 +58,7 @@ Prompts* prompts_create(void)
     p->textures[PROMPT_B]     = sprite_load("rom:/prompt_b.sprite");
     p->textures[PROMPT_Z]     = sprite_load("rom:/prompt_z.sprite");
     p->textures[PROMPT_STICK] = sprite_load("rom:/prompt_stick.sprite");
+    p->textures[PROMPT_START] = sprite_load("rom:/prompt_start.sprite");
 
     p->quad    = malloc_uncached(sizeof(T3DVertPacked) * 2);
     p->scratch = malloc_uncached(sizeof(T3DMat4FP));

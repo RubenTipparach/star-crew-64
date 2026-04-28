@@ -14,13 +14,19 @@
 #define STEER_LERP   0.25f
 #define IMPULSE_LERP 0.10f
 
+// Mesh-local half-extents (BRIDGE_PANEL_POS bounds: ±15 along X, ±8 along Z,
+// +1 unit pad so the character doesn't visibly kiss the surface).
+#define LOCAL_HALF_X 16.0f
+#define LOCAL_HALF_Z 9.0f
+
+// Distance from panel center to "seat" (where the operator stands). Pushes
+// the player far enough back to not clip but close enough to look engaged.
+#define SEAT_DISTANCE 18.0f
+
 static BridgePanel panel_instance = {0};
 
-// Build flat-shaded T3DVertPacked records straight from the baked
-// BRIDGE_PANEL_POS / BRIDGE_PANEL_UV / BRIDGE_PANEL_TRI_NORMAL tables. Two
-// packed structs per triangle: pack_a holds verts 0+1, pack_b holds vert 2
-// padded with a copy of vert 0 (we only ever issue (0,1,2) so the duplicate
-// is never referenced).
+// Same flat-shaded packing pattern used elsewhere — see weapons_console.c
+// for full notes.
 static void build_verts(T3DVertPacked *out)
 {
     uint32_t white = 0xFFFFFFFF;
@@ -61,12 +67,30 @@ BridgePanel* bridge_panel_create(float x, float z, float facing_yaw)
     BridgePanel *p = &panel_instance;
     p->position = (T3DVec3){{x, 0.0f, z}};
     p->rot_y = facing_yaw;
-    p->player_in_range = false;
-    p->player_active   = false;
+    // Compute the world-space AABB half-extents from the local OBB. For an
+    // axis-aligned local box rotated by yaw, the bounding world AABB is:
+    //   half_world.x = |cos|·half_local.x + |sin|·half_local.z
+    //   half_world.z = |sin|·half_local.x + |cos|·half_local.z
+    float ca = fabsf(cosf(facing_yaw));
+    float sa = fabsf(sinf(facing_yaw));
+    p->half_x = ca * LOCAL_HALF_X + sa * LOCAL_HALF_Z;
+    p->half_z = sa * LOCAL_HALF_X + ca * LOCAL_HALF_Z;
+    p->occupant_pid = -1;
+    p->player_in_range_any = false;
     p->steer   = 0.0f;
     p->impulse = 0.0f;
-    p->prev_a  = false;
-    p->prev_b  = false;
+    for (int i = 0; i < 4; i++) { p->prev_a[i] = false; p->prev_b[i] = false; }
+
+    // Seat sits in front of the panel along its facing direction. The mesh
+    // is authored with -Z as the front face; with t3d's Y-yaw convention the
+    // world-space front direction is (sin(yaw), 0, -cos(yaw)).
+    float fx =  sinf(facing_yaw);
+    float fz = -cosf(facing_yaw);
+    p->seat_x = x + fx * SEAT_DISTANCE;
+    p->seat_z = z + fz * SEAT_DISTANCE;
+    // Character rot_y of θ makes the model face (sin θ, 0, -cos θ); to face
+    // back at the panel (i.e., along -front_world), set rot_y = facing + π.
+    p->seat_yaw = facing_yaw + 3.1415927f;
 
     p->texture = sprite_load("rom:/bridge_panel.sprite");
     p->verts   = malloc_uncached(sizeof(T3DVertPacked) * BRIDGE_PANEL_NUM_TRIS * 2);
@@ -83,53 +107,85 @@ BridgePanel* bridge_panel_create(float x, float z, float facing_yaw)
     return p;
 }
 
-bool bridge_panel_update(BridgePanel *p, float player_x, float player_z,
-                         joypad_inputs_t inputs)
+static bool in_radius(float dx, float dz)
 {
+    return (dx * dx + dz * dz) <= (PANEL_INTERACT_RADIUS * PANEL_INTERACT_RADIUS);
+}
+
+bool bridge_panel_try_engage(BridgePanel *p, int pid,
+                             float player_x, float player_z,
+                             joypad_inputs_t inputs)
+{
+    if (pid < 0 || pid >= 4) return false;
+    if (p->occupant_pid >= 0 && p->occupant_pid != pid) return false;
+
+    bool a_now = inputs.btn.a != 0;
+    bool a_pressed = a_now && !p->prev_a[pid];
+    p->prev_a[pid] = a_now;
+
+    if (p->occupant_pid == pid) return true;
+
     float dx = player_x - p->position.v[0];
     float dz = player_z - p->position.v[2];
-    float d2 = dx * dx + dz * dz;
-    p->player_in_range = (d2 <= PANEL_INTERACT_RADIUS * PANEL_INTERACT_RADIUS);
-
-    // Edge-detect A and B.
-    // A: enter the helm (only when in range and not already active).
-    // B: leave the helm (only when active). Force-exit if the player walks out
-    //    of range so they can't get stuck "piloting" while disconnected.
-    bool a_now = inputs.btn.a != 0;
-    bool b_now = inputs.btn.b != 0;
-    bool a_pressed = a_now && !p->prev_a;
-    bool b_pressed = b_now && !p->prev_b;
-    p->prev_a = a_now;
-    p->prev_b = b_now;
-
-    if (!p->player_active && p->player_in_range && a_pressed) {
-        p->player_active = true;
+    if (in_radius(dx, dz) && a_pressed) {
+        p->occupant_pid = pid;
+        return true;
     }
-    if (p->player_active && b_pressed) {
-        p->player_active = false;
-    }
-    if (!p->player_in_range) {
-        p->player_active = false;
-    }
+    return false;
+}
 
-    if (p->player_active) {
-        // Stick X turns the ship; stick Y drives forward (+) / backward (-).
-        // Both clamp to [-1,+1] before lerping into the smoothed control state.
-        float target_steer   = (float)inputs.stick_x / STICK_DIVISOR;
-        float target_impulse = (float)inputs.stick_y / STICK_DIVISOR;
-        if (target_steer < -1.0f)   target_steer   = -1.0f;
-        if (target_steer >  1.0f)   target_steer   =  1.0f;
-        if (target_impulse < -1.0f) target_impulse = -1.0f;
-        if (target_impulse >  1.0f) target_impulse =  1.0f;
-        p->steer   += (target_steer   - p->steer)   * STEER_LERP;
-        p->impulse += (target_impulse - p->impulse) * IMPULSE_LERP;
-    } else {
+bool bridge_panel_drive(BridgePanel *p, int pid, joypad_inputs_t inputs)
+{
+    if (pid < 0 || pid >= 4 || p->occupant_pid != pid) {
         // Decay back to neutral when nobody's at the helm.
         p->steer   += (0.0f - p->steer)   * STEER_LERP;
         p->impulse += (0.0f - p->impulse) * IMPULSE_LERP * 0.5f;
+        return false;
     }
 
-    return p->player_active;
+    bool b_now = inputs.btn.b != 0;
+    bool b_pressed = b_now && !p->prev_b[pid];
+    p->prev_b[pid] = b_now;
+    // Keep A edge state up to date so re-engaging on the next tap works.
+    p->prev_a[pid] = inputs.btn.a != 0;
+
+    if (b_pressed) {
+        p->occupant_pid = -1;
+        return false;
+    }
+
+    float target_steer   = (float)inputs.stick_x / STICK_DIVISOR;
+    float target_impulse = (float)inputs.stick_y / STICK_DIVISOR;
+    if (target_steer < -1.0f)   target_steer   = -1.0f;
+    if (target_steer >  1.0f)   target_steer   =  1.0f;
+    if (target_impulse < -1.0f) target_impulse = -1.0f;
+    if (target_impulse >  1.0f) target_impulse =  1.0f;
+    p->steer   += (target_steer   - p->steer)   * STEER_LERP;
+    p->impulse += (target_impulse - p->impulse) * IMPULSE_LERP;
+    return true;
+}
+
+void bridge_panel_update_proximity(BridgePanel *p,
+                                   const float (*positions)[2],
+                                   const bool *present, int max_pids)
+{
+    p->player_in_range_any = false;
+    for (int i = 0; i < max_pids; i++) {
+        if (!present[i]) continue;
+        if (i == p->occupant_pid) continue;
+        float dx = positions[i][0] - p->position.v[0];
+        float dz = positions[i][1] - p->position.v[2];
+        if (in_radius(dx, dz)) { p->player_in_range_any = true; break; }
+    }
+}
+
+bool bridge_panel_blocks(const BridgePanel *p, float wx, float wz)
+{
+    float dx = wx - p->position.v[0];
+    float dz = wz - p->position.v[2];
+    if (dx < 0) dx = -dx;
+    if (dz < 0) dz = -dz;
+    return dx <= p->half_x && dz <= p->half_z;
 }
 
 void bridge_panel_draw(BridgePanel *p)
@@ -143,9 +199,6 @@ void bridge_panel_draw(BridgePanel *p)
     t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
 
     t3d_matrix_push(p->matrix);
-    // Chunk loads to stay under tiny3d's internal vertex-buffer cap. Each
-    // tri = 2 packed structs = 4 individual verts (slot 3 is a padding
-    // duplicate of slot 0 and is never indexed).
     const int TRIS_PER_LOAD = 6;
     for (int tri = 0; tri < BRIDGE_PANEL_NUM_TRIS; tri += TRIS_PER_LOAD) {
         int chunk = BRIDGE_PANEL_NUM_TRIS - tri;
