@@ -16,6 +16,7 @@ typedef enum {
     PROMPT_B     = 1,
     PROMPT_Z     = 2,
     PROMPT_STICK = 3,
+    PROMPT_START = 4,
     PROMPT_COUNT
 } PromptId;
 

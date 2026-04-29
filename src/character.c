@@ -53,9 +53,9 @@ static const int16_t PART_UV_V1[CHARACTER_NUM_PARTS] = {
     UV(8), UV(8), UV(16), UV(24), UV(24), UV(32), UV(32),
 };
 
-// Up to two players (one per controller). character_create() hands out the
-// next free slot — main.c calls it once per detected controller.
-#define MAX_CHARACTERS 2
+// Up to four players (one per controller). character_create() hands out
+// the next free slot — main.c calls it once per ready player.
+#define MAX_CHARACTERS 4
 static Character character_slots[MAX_CHARACTERS] = {0};
 static int next_character_slot = 0;
 

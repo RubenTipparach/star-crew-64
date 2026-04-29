@@ -3,25 +3,27 @@
 
 #include "weapons_console.h"
 
-// Distance (world units) at which the player can interact with the console.
-// Matches the bridge panel's radius so both stations feel equally forgiving.
 #define WEAPONS_INTERACT_RADIUS 35.0f
 
 // Cooldowns per weapon (frames @ ~60Hz). Phasers are the rapid primary;
 // torpedoes are heavy and slow.
-#define PHASER_COOLDOWN_FRAMES   12     // ~5 shots/sec
-#define TORPEDO_COOLDOWN_FRAMES  45     // ~1.3 shots/sec
+#define PHASER_COOLDOWN_FRAMES   12
+#define TORPEDO_COOLDOWN_FRAMES  45
 
-// Aim adjustment rate while at the gunner seat. Stick fully over rotates the
-// aim by AIM_RATE radians per frame; clamped to +/- AIM_LIMIT off the ship's
-// forward so the gunner can't shoot directly behind.
+// Aim adjustment rate while at the gunner seat.
 #define AIM_RATE   0.045f
 #define AIM_LIMIT  1.0472f      // 60° each way
 
+// Mesh-local half-extents (WEAPONS_PANEL_POS body bounds ±10 X, ±8 Z plus a
+// 1-unit pad). The barrel pokes out the front, but we only care about the
+// body for collision since the barrel is above character chest height.
+#define LOCAL_HALF_X 11.0f
+#define LOCAL_HALF_Z 9.0f
+
+#define SEAT_DISTANCE 18.0f
+
 static WeaponsConsole console_instance = {0};
 
-// Same shared build pattern as bridge_panel: each tri becomes two packed
-// structs (slot 3 is a duplicate of slot 0, never indexed).
 static void build_verts(T3DVertPacked *out)
 {
     uint32_t white = 0xFFFFFFFF;
@@ -61,16 +63,32 @@ WeaponsConsole* weapons_console_create(float x, float z, float facing_yaw)
     WeaponsConsole *w = &console_instance;
     w->position = (T3DVec3){{x, 0.0f, z}};
     w->rot_y = facing_yaw;
-    w->player_in_range = false;
-    w->player_active   = false;
-    w->prev_a = false;
-    w->prev_b = false;
-    w->prev_z = false;
+    w->occupant_pid = -1;
+    w->player_in_range_any = false;
     w->aim_yaw = 0.0f;
     w->fire_phaser_requested  = false;
     w->fire_torpedo_requested = false;
     w->phaser_cooldown  = 0;
     w->torpedo_cooldown = 0;
+    {
+        float ca = fabsf(cosf(facing_yaw));
+        float sa = fabsf(sinf(facing_yaw));
+        w->half_x = ca * LOCAL_HALF_X + sa * LOCAL_HALF_Z;
+        w->half_z = sa * LOCAL_HALF_X + ca * LOCAL_HALF_Z;
+    }
+    for (int i = 0; i < 4; i++) {
+        w->prev_a[i] = false;
+        w->prev_b[i] = false;
+        w->prev_z[i] = false;
+    }
+
+    // Seat = panel position + front_world * SEAT_DISTANCE. Mesh front is on
+    // local -Z, so front_world = (sin(yaw), 0, -cos(yaw)).
+    float fx =  sinf(facing_yaw);
+    float fz = -cosf(facing_yaw);
+    w->seat_x = x + fx * SEAT_DISTANCE;
+    w->seat_z = z + fz * SEAT_DISTANCE;
+    w->seat_yaw = facing_yaw + 3.1415927f;
 
     w->texture = sprite_load("rom:/weapons_panel.sprite");
     w->verts   = malloc_uncached(sizeof(T3DVertPacked) * WEAPONS_PANEL_NUM_TRIS * 2);
@@ -87,69 +105,98 @@ WeaponsConsole* weapons_console_create(float x, float z, float facing_yaw)
     return w;
 }
 
-bool weapons_console_update(WeaponsConsole *w, float player_x, float player_z,
-                            joypad_inputs_t inputs)
+static bool in_radius(float dx, float dz)
 {
+    return (dx * dx + dz * dz) <= (WEAPONS_INTERACT_RADIUS * WEAPONS_INTERACT_RADIUS);
+}
+
+bool weapons_console_try_engage(WeaponsConsole *w, int pid,
+                                float player_x, float player_z,
+                                joypad_inputs_t inputs)
+{
+    if (pid < 0 || pid >= 4) return false;
+    if (w->occupant_pid >= 0 && w->occupant_pid != pid) return false;
+
+    bool a_now = inputs.btn.a != 0;
+    bool a_pressed = a_now && !w->prev_a[pid];
+    w->prev_a[pid] = a_now;
+
+    if (w->occupant_pid == pid) return true;
+
     float dx = player_x - w->position.v[0];
     float dz = player_z - w->position.v[2];
-    float d2 = dx * dx + dz * dz;
-    w->player_in_range = (d2 <= WEAPONS_INTERACT_RADIUS * WEAPONS_INTERACT_RADIUS);
+    if (in_radius(dx, dz) && a_pressed) {
+        w->occupant_pid = pid;
+        w->aim_yaw = 0.0f;
+        w->phaser_cooldown  = 0;
+        w->torpedo_cooldown = 0;
+        return true;
+    }
+    return false;
+}
+
+bool weapons_console_drive(WeaponsConsole *w, int pid, joypad_inputs_t inputs)
+{
+    if (pid < 0 || pid >= 4 || w->occupant_pid != pid) return false;
 
     bool a_now = inputs.btn.a != 0;
     bool b_now = inputs.btn.b != 0;
     bool z_now = inputs.btn.z != 0;
-    bool a_pressed = a_now && !w->prev_a;
-    bool b_pressed = b_now && !w->prev_b;
-    bool z_pressed = z_now && !w->prev_z;
-    w->prev_a = a_now;
-    w->prev_b = b_now;
-    w->prev_z = z_now;
+    bool a_pressed = a_now && !w->prev_a[pid];
+    bool b_pressed = b_now && !w->prev_b[pid];
+    bool z_pressed = z_now && !w->prev_z[pid];
+    w->prev_a[pid] = a_now;
+    w->prev_b[pid] = b_now;
+    w->prev_z[pid] = z_now;
 
-    // ENTER: A while in range and not active. Consume the press so the same
-    // frame doesn't immediately fire a phaser through the active branch below.
-    if (!w->player_active && w->player_in_range && a_pressed) {
-        w->player_active = true;
-        w->aim_yaw = 0.0f;
-        w->phaser_cooldown  = 0;
-        w->torpedo_cooldown = 0;
-        a_pressed = false;
-    }
-    // LEAVE: B while active. Don't fall through to fire logic on the same
-    // frame either.
-    if (w->player_active && b_pressed) {
-        w->player_active = false;
+    if (b_pressed) {
+        w->occupant_pid = -1;
         return false;
     }
-    // Force-exit if the player walks out of range.
-    if (!w->player_in_range) {
-        w->player_active = false;
+
+    float sx = (float)inputs.stick_x / STICK_DIVISOR;
+    if (sx < -1.0f) sx = -1.0f;
+    if (sx >  1.0f) sx =  1.0f;
+    w->aim_yaw += sx * AIM_RATE;
+    if (fabsf(sx) < 0.05f) w->aim_yaw *= 0.97f;
+    if (w->aim_yaw < -AIM_LIMIT) w->aim_yaw = -AIM_LIMIT;
+    if (w->aim_yaw >  AIM_LIMIT) w->aim_yaw =  AIM_LIMIT;
+
+    if (w->phaser_cooldown > 0)  w->phaser_cooldown--;
+    if (w->torpedo_cooldown > 0) w->torpedo_cooldown--;
+
+    if (a_pressed && w->phaser_cooldown == 0) {
+        w->fire_phaser_requested = true;
+        w->phaser_cooldown = PHASER_COOLDOWN_FRAMES;
     }
-
-    if (w->player_active) {
-        // Stick X drives the aim cone. Decay slowly back toward zero when
-        // the stick is centered so the gunner doesn't have to fight drift.
-        float sx = (float)inputs.stick_x / STICK_DIVISOR;
-        if (sx < -1.0f) sx = -1.0f;
-        if (sx >  1.0f) sx =  1.0f;
-        w->aim_yaw += sx * AIM_RATE;
-        if (fabsf(sx) < 0.05f) w->aim_yaw *= 0.97f;
-        if (w->aim_yaw < -AIM_LIMIT) w->aim_yaw = -AIM_LIMIT;
-        if (w->aim_yaw >  AIM_LIMIT) w->aim_yaw =  AIM_LIMIT;
-
-        if (w->phaser_cooldown > 0)  w->phaser_cooldown--;
-        if (w->torpedo_cooldown > 0) w->torpedo_cooldown--;
-
-        if (a_pressed && w->phaser_cooldown == 0) {
-            w->fire_phaser_requested = true;
-            w->phaser_cooldown = PHASER_COOLDOWN_FRAMES;
-        }
-        if (z_pressed && w->torpedo_cooldown == 0) {
-            w->fire_torpedo_requested = true;
-            w->torpedo_cooldown = TORPEDO_COOLDOWN_FRAMES;
-        }
+    if (z_pressed && w->torpedo_cooldown == 0) {
+        w->fire_torpedo_requested = true;
+        w->torpedo_cooldown = TORPEDO_COOLDOWN_FRAMES;
     }
+    return true;
+}
 
-    return w->player_active;
+void weapons_console_update_proximity(WeaponsConsole *w,
+                                      const float (*positions)[2],
+                                      const bool *present, int max_pids)
+{
+    w->player_in_range_any = false;
+    for (int i = 0; i < max_pids; i++) {
+        if (!present[i]) continue;
+        if (i == w->occupant_pid) continue;
+        float dx = positions[i][0] - w->position.v[0];
+        float dz = positions[i][1] - w->position.v[2];
+        if (in_radius(dx, dz)) { w->player_in_range_any = true; break; }
+    }
+}
+
+bool weapons_console_blocks(const WeaponsConsole *w, float wx, float wz)
+{
+    float dx = wx - w->position.v[0];
+    float dz = wz - w->position.v[2];
+    if (dx < 0) dx = -dx;
+    if (dz < 0) dz = -dz;
+    return dx <= w->half_x && dz <= w->half_z;
 }
 
 bool weapons_console_consume_phaser(WeaponsConsole *w)

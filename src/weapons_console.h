@@ -4,23 +4,30 @@
 #include "game_config.h"
 #include "weapons_panel_model.h"
 
-// Gunner station. Player walks up, presses A to take the seat. While active,
-// the stick aims a yaw offset off the ship's forward, A fires phasers, Z
-// fires a heavier photon torpedo, and B leaves the station.
+// Gunner station. Any player walks up, presses A to take the seat. While
+// active, the stick aims a yaw offset off the ship's forward, A fires
+// phasers, Z fires a heavier photon torpedo, and B leaves the station.
+// `occupant_pid` is the 0-based pad index that holds the seat (-1 if free).
 typedef struct {
     T3DVertPacked *verts;        // WEAPONS_PANEL_NUM_TRIS * 2 packed structs
-    T3DMat4FP     *matrix;       // single static placement matrix
+    T3DMat4FP     *matrix;
     sprite_t      *texture;
-    T3DVec3        position;     // world-space placement
-    float          rot_y;        // facing yaw
+    T3DVec3        position;
+    float          rot_y;
 
-    bool           player_in_range;
-    bool           player_active;     // toggled with A in / B out
+    float          seat_x;
+    float          seat_z;
+    float          seat_yaw;
+    float          half_x;
+    float          half_z;
 
-    // Edge-detect state for the buttons we read while active.
-    bool           prev_a;
-    bool           prev_b;
-    bool           prev_z;
+    int            occupant_pid;     // 0..3 active, -1 free
+    bool           player_in_range_any;
+
+    // Per-pad edge-detect state.
+    bool           prev_a[4];
+    bool           prev_b[4];
+    bool           prev_z[4];
 
     // Aim, in radians, relative to the ship's forward direction. Stick X
     // drives this while active; clamped to a sensible cone so the player can
@@ -37,16 +44,20 @@ typedef struct {
 
 WeaponsConsole* weapons_console_create(float x, float z, float facing_yaw);
 
-// Update interaction state. Returns true if the player is currently active at
-// the station (caller should suppress walking + character animation in that
-// case, mirroring the bridge panel's pattern).
-bool weapons_console_update(WeaponsConsole *w,
-                            float player_x, float player_z,
-                            joypad_inputs_t inputs);
+bool weapons_console_try_engage(WeaponsConsole *w, int pid,
+                                float player_x, float player_z,
+                                joypad_inputs_t inputs);
 
-// Returns true (and clears the flag) if a phaser shot was requested this
-// frame. Same for torpedoes. Both should be polled every frame from main.c
-// while the station is active.
+// Drive the active player's controls (aim, fire, leave). Returns true if the
+// player still holds the seat after this frame.
+bool weapons_console_drive(WeaponsConsole *w, int pid, joypad_inputs_t inputs);
+
+void weapons_console_update_proximity(WeaponsConsole *w,
+                                      const float (*positions)[2],
+                                      const bool *present, int max_pids);
+
+bool weapons_console_blocks(const WeaponsConsole *w, float wx, float wz);
+
 bool weapons_console_consume_phaser(WeaponsConsole *w);
 bool weapons_console_consume_torpedo(WeaponsConsole *w);
 

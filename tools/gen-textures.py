@@ -377,6 +377,169 @@ def make_weapons_panel() -> list[tuple[int, int, int, int]]:
     return px
 
 
+def make_engineering_panel() -> list[tuple[int, int, int, int]]:
+    """
+    Engineering console atlas (32x32). Amber theme so the player can tell it
+    apart from helm (green) and weapons (red). Same band layout as the other
+    panels so the weapons-panel mesh can be reused here.
+      band 0 (y  0- 7): power-grid display — amber bars on dark
+      band 1 (y  8-15): system buttons — amber caps with bezels
+      band 2 (y 16-23): metal console body
+      band 3 (y 24-31): caution stripe — amber/black diagonals
+    """
+    bezel    = (30, 28, 24, 255)
+    metal    = (78, 70, 58, 255)
+    metal_hl = (130, 118, 95, 255)
+    metal_dk = (45, 40, 32, 255)
+    screen   = (28, 18, 6, 255)
+    bar_lo   = (130, 80, 20, 255)
+    bar_hi   = (255, 180, 60, 255)
+    glow     = (255, 220, 140, 255)
+    btn      = (220, 140, 30, 255)
+    btn_hl   = (255, 200, 90, 255)
+    btn_dk   = (150, 90, 15, 255)
+    cau_amb  = (240, 175, 35, 255)
+    cau_dk   = (40, 30, 8, 255)
+
+    px = [metal] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if y < 8:
+                # Power grid: vertical amber bars with varying heights.
+                c = screen
+                # 6 bars across (each ~5px wide). Each bar fills from the
+                # bottom up to a deterministic height so the readout looks
+                # like a power-distribution chart.
+                bar = x // 5
+                col_in_bar = x % 5
+                heights = [4, 6, 3, 5, 6, 2]
+                if 1 <= col_in_bar <= 3 and bar < 6:
+                    h = heights[bar]
+                    if (7 - y) <= h:
+                        c = bar_hi if (7 - y) == h else bar_lo
+                if x < 1 or x > 30 or y == 0 or y == 7:
+                    c = bezel
+                if y == 1 and 4 <= x <= 27:
+                    c = glow
+            elif y < 16:
+                cell = x // 8
+                inset_x = x % 8
+                inset_y = (y - 8)
+                if inset_x == 0 or inset_x == 7 or inset_y == 0 or inset_y == 7:
+                    c = bezel
+                else:
+                    if (inset_x in (1, 6)) and (inset_y in (1, 6)):
+                        c = bezel
+                    elif inset_x in (2, 3) and inset_y in (2, 3):
+                        c = btn_hl
+                    elif (cell % 2) == 0:
+                        c = btn
+                    else:
+                        c = btn_dk
+            elif y < 24:
+                yb = y - 16
+                if yb == 0 or yb == 7:
+                    c = metal_dk
+                elif (x + yb) % 9 == 0:
+                    c = metal_hl
+                else:
+                    c = metal
+                if x in (3, 28) and yb in (3, 4):
+                    c = bezel
+            else:
+                yb = y - 24
+                if ((x + yb) // 4) % 2 == 0:
+                    c = cau_amb
+                else:
+                    c = cau_dk
+                if yb in (0, 7):
+                    c = metal_dk
+            px[y * SIZE + x] = c
+    return px
+
+
+def make_science_panel() -> list[tuple[int, int, int, int]]:
+    """
+    Science console atlas (32x32). Cyan/blue theme — visually distinct from
+    helm (green), weapons (red), engineering (amber). Same band layout.
+      band 0 (y  0- 7): shield-status display — cyan grid + arc readout
+      band 1 (y  8-15): touch-pad buttons — cyan caps
+      band 2 (y 16-23): metal console body — blue-tinted grey
+      band 3 (y 24-31): cyan trim stripe
+    """
+    bezel    = (24, 28, 38, 255)
+    metal    = (58, 64, 78, 255)
+    metal_hl = (110, 122, 145, 255)
+    metal_dk = (32, 36, 48, 255)
+    screen   = (8, 18, 32, 255)
+    grid     = (60, 160, 220, 255)
+    glow     = (180, 240, 255, 255)
+    arc_dim  = (40, 110, 180, 255)
+    btn      = (60, 150, 220, 255)
+    btn_hl   = (170, 220, 255, 255)
+    btn_dk   = (30, 80, 130, 255)
+    trim     = (90, 180, 230, 255)
+    trim_dk  = (20, 50, 80, 255)
+
+    px = [metal] * (SIZE * SIZE)
+    for y in range(SIZE):
+        for x in range(SIZE):
+            if y < 8:
+                c = screen
+                if x % 4 == 0 or (y % 4 == 0):
+                    c = grid
+                # Shield-arc readout: a wide arc curve in the upper band.
+                # Approximate with a few pixels along an ellipse y = 6 - r.
+                cx = 16
+                cy = 7
+                dx = x - cx
+                dy = y - cy
+                r2 = dx * dx + (dy * dy) * 4
+                if 30 <= r2 <= 45:
+                    c = glow
+                elif 46 <= r2 <= 70:
+                    c = arc_dim
+                if x < 1 or x > 30 or y == 0 or y == 7:
+                    c = bezel
+            elif y < 16:
+                cell = x // 8
+                inset_x = x % 8
+                inset_y = (y - 8)
+                if inset_x == 0 or inset_x == 7 or inset_y == 0 or inset_y == 7:
+                    c = bezel
+                else:
+                    if (inset_x in (1, 6)) and (inset_y in (1, 6)):
+                        c = bezel
+                    elif inset_x in (2, 3) and inset_y in (2, 3):
+                        c = btn_hl
+                    elif (cell % 2) == 0:
+                        c = btn
+                    else:
+                        c = btn_dk
+            elif y < 24:
+                yb = y - 16
+                if yb == 0 or yb == 7:
+                    c = metal_dk
+                elif (x + yb) % 9 == 0:
+                    c = metal_hl
+                else:
+                    c = metal
+                if x in (3, 28) and yb in (3, 4):
+                    c = bezel
+            else:
+                yb = y - 24
+                if yb in (0, 7):
+                    c = metal_dk
+                elif (x + yb) % 6 == 0:
+                    c = trim
+                elif (x + yb) % 6 == 3:
+                    c = trim_dk
+                else:
+                    c = bezel
+            px[y * SIZE + x] = c
+    return px
+
+
 def make_ship() -> list[tuple[int, int, int, int]]:
     """
     Ship hull atlas (32x32). Two bands:
@@ -575,6 +738,45 @@ def make_prompt_z():
         text=(240, 240, 250, 255))
 
 
+def make_prompt_start() -> list[tuple[int, int, int, int]]:
+    """Start-button glyph: red-orange disk with a small house-shape /
+    'play' triangle, used for the lobby launch prompt."""
+    fill    = (210, 60, 50, 255)
+    outline = (90, 25, 20, 255)
+    text    = (255, 255, 255, 255)
+    bg = (0, 0, 0, 0)
+    px = [bg] * (PROMPT_SIZE * PROMPT_SIZE)
+    cx = cy = 7.5
+    r_outer = 7.0
+    r_inner = 5.6
+    for y in range(PROMPT_SIZE):
+        for x in range(PROMPT_SIZE):
+            dx = x - cx
+            dy = y - cy
+            d = (dx * dx + dy * dy) ** 0.5
+            if d <= r_inner:
+                px[y * PROMPT_SIZE + x] = fill
+            elif d <= r_outer:
+                px[y * PROMPT_SIZE + x] = outline
+    # Centered "play" triangle pointing right.
+    tri = [
+        "..##.....",
+        "..###....",
+        "..####...",
+        "..#####..",
+        "..####...",
+        "..###....",
+        "..##.....",
+    ]
+    gx0 = 4
+    gy0 = 4
+    for gy, row in enumerate(tri):
+        for gx, ch in enumerate(row):
+            if ch == "#":
+                px[(gy0 + gy) * PROMPT_SIZE + (gx0 + gx)] = text
+    return px
+
+
 def make_prompt_stick() -> list[tuple[int, int, int, int]]:
     """Stick glyph: a grey ring with a 4-direction arrow rosette inside.
     Reads as 'use the stick' at the small billboard size."""
@@ -637,6 +839,8 @@ def main() -> None:
         "character.png": make_character(),
         "bridge_panel.png": make_bridge_panel(),
         "weapons_panel.png": make_weapons_panel(),
+        "engineering_panel.png": make_engineering_panel(),
+        "science_panel.png": make_science_panel(),
         "ship.png": make_ship(),
     }
     for name, pixels in big_outputs.items():
@@ -661,6 +865,7 @@ def main() -> None:
         "prompt_a.png":     make_prompt_a(),
         "prompt_b.png":     make_prompt_b(),
         "prompt_z.png":     make_prompt_z(),
+        "prompt_start.png": make_prompt_start(),
         "prompt_stick.png": make_prompt_stick(),
     }
     for name, pixels in prompt_outputs.items():
