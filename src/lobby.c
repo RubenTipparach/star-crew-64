@@ -75,8 +75,8 @@ static void draw_slot(int font_id, int slot, const LobbyState *st, int hold_fram
     }
     rdpq_text_print(NULL, font_id, SLOT_X + 8, y + 18, label);
 
-    // P1 is the launcher — show a hold-progress bar inside their card when
-    // they're holding START and everyone else is ready.
+    // P1 is the launcher — small in-card progress bar mirrors the big
+    // centered indicator drawn by the lobby loop.
     if (slot == 0 && hold_frames > 0) {
         int bar_w = (SLOT_W - 16) * hold_frames / LOBBY_LAUNCH_HOLD;
         if (bar_w > SLOT_W - 16) bar_w = SLOT_W - 16;
@@ -113,14 +113,15 @@ int lobby_run(int font_id)
             prev_b[i] = b_now;
         }
 
-        // Launch logic: only P1's start counts, and only if every connected
-        // controller has readied (and at least P1 is ready).
-        bool all_ready = st.ready[0];
-        for (int i = 1; i < LOBBY_MAX_PLAYERS; i++) {
-            if (st.connected[i] && !st.ready[i]) { all_ready = false; break; }
-        }
+        // P1 is the launcher and is auto-ready as soon as they're connected,
+        // so solo play just needs a connected pad + holding START. P2-P4 still
+        // opt in via A; connected-but-not-ready non-P1 pads are observers and
+        // are dropped from the launch mask. Any other-pad readies still need
+        // P1 to actually pull the trigger by holding START.
+        if (st.connected[0]) st.ready[0] = true;
+
         start_held = st.connected[0] && in[0].btn.start != 0;
-        if (all_ready && start_held) {
+        if (start_held) {
             hold_frames++;
             if (hold_frames >= LOBBY_LAUNCH_HOLD) {
                 int mask = 0;
@@ -150,18 +151,41 @@ int lobby_run(int font_id)
         int ready  = lobby_count_ready(&st);
         int active = lobby_count_connected(&st);
         char footer[80];
-        if (!all_ready) {
+        if (hold_frames > 0) {
             snprintf(footer, sizeof footer,
-                     "READY %d/%d   WAIT FOR ALL CREW", ready, active);
-        } else if (hold_frames > 0) {
+                     "LAUNCHING IN %ds...",
+                     (LOBBY_LAUNCH_HOLD - hold_frames + 59) / 60);
+        } else if (active == 0) {
             snprintf(footer, sizeof footer,
-                     "P1 HOLDING START... %d/%ds",
-                     hold_frames / 60, LOBBY_LAUNCH_HOLD / 60);
+                     "CONNECT P1 CONTROLLER TO LAUNCH");
         } else {
             snprintf(footer, sizeof footer,
-                     "ALL READY  -  P1 HOLD START 3s TO LAUNCH");
+                     "READY %d/%d  -  P1 HOLD START 3s TO LAUNCH",
+                     ready, active);
         }
         rdpq_text_print(NULL, font_id, 14, 224, footer);
+
+        // Big centered hold-START indicator. Drawn whenever P1 is pressing
+        // START so the user always sees feedback that their input is being
+        // received, even before the bar reaches full.
+        if (hold_frames > 0) {
+            const int bw = 200;
+            const int bh = 16;
+            const int bx = (320 - bw) / 2;
+            const int by = 130;
+            // Frame
+            fill_rect(bx - 3, by - 3, bx + bw + 3, by + bh + 3, 200, 200, 220);
+            // Track
+            fill_rect(bx, by, bx + bw, by + bh, 30, 40, 60);
+            // Fill
+            int fw = bw * hold_frames / LOBBY_LAUNCH_HOLD;
+            if (fw > bw) fw = bw;
+            uint8_t fr = 240, fg = 200, fb = 80;
+            if (hold_frames >= LOBBY_LAUNCH_HOLD) { fr = 120; fg = 240; fb = 140; }
+            fill_rect(bx, by, bx + fw, by + bh, fr, fg, fb);
+            rdpq_set_mode_standard();
+            rdpq_text_print(NULL, font_id, bx + 32, by - 6, "HOLDING START...");
+        }
 
         rdpq_detach_show();
     }
