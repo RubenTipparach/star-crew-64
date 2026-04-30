@@ -503,15 +503,15 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     // "stars-on-wings" with a wing-shaped halo around each cross).
     // Drawing them first without depth means the ship always overdraws
     // them cleanly.
+    // rdpq_set_mode_standard() resets the blender to a clean (non-AA) state.
+    // Without it, residual blender state from prior draws was sampling
+    // coverage from the surrounding (transparent) texels of the 1-bit-alpha
+    // cutout sprites, producing a visible 8×8 grey halo around every star.
     rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     rdpq_mode_filter(FILTER_POINT);
     rdpq_mode_alphacompare(1);
-    // AA off: with a 1-bit-alpha cutout sprite, edge antialiasing samples
-    // coverage from the transparent surround and leaves a grey halo around
-    // every star — reads as a visible 8×8 square instead of a clean point.
-    rdpq_mode_aa(false);
     t3d_state_set_drawflags(T3D_FLAG_TEXTURED);
 
     uint8_t last_tex = 0xFF;
