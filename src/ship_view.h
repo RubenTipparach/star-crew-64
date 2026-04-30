@@ -24,8 +24,19 @@
 #define SHIP_VIEW_PROJECTILES   8
 #define PHASER_LIFETIME         60       // ~1s @ 60Hz, fast & short-lived
 #define PHASER_SPEED            4.0f
+#define PHASER_DAMAGE           1
 #define TORPEDO_LIFETIME        150      // ~2.5s, drifts further before fading
 #define TORPEDO_SPEED           1.8f
+#define TORPEDO_DAMAGE          3
+
+// Enemy pool: small alien fighters drifting around the player ship. Hit by a
+// projectile → take damage; HP at zero → flash a brief explosion frame and
+// respawn at a fresh random offset so there's always something to fight.
+#define SHIP_VIEW_ENEMIES       5
+#define ENEMY_HP_MAX            3
+#define ENEMY_HIT_RADIUS        7.0f     // world units; matches the cube extent
+#define ENEMY_EXPLODE_FRAMES    20       // brief flash before respawn
+#define ENEMY_DRIFT_SPEED       0.35f    // units/frame at full vector length
 
 typedef enum {
     PROJ_PHASER  = 0,
@@ -38,6 +49,14 @@ typedef struct {
     int            timer;        // remaining frames; <=0 means inactive
     ProjectileType type;
 } ShipProjectile;
+
+typedef struct {
+    float    x, y, z;
+    float    vx, vy, vz;
+    int      hp;            // > 0 = alive; 0 = exploding; counts down
+    int      explode_timer; // > 0 while flashing the death frame
+    float    spin;          // accumulated yaw used for visual rotation
+} ShipEnemy;
 
 typedef struct {
     T3DViewport    viewport;       // its own viewport, sub-region of the framebuffer
@@ -74,6 +93,18 @@ typedef struct {
     ShipProjectile projectiles[SHIP_VIEW_PROJECTILES];
     T3DVertPacked *proj_mesh;            // small textureless cube, shared
     T3DMat4FP     *proj_matrices;        // FB_COUNT * SHIP_VIEW_PROJECTILES
+
+    // Enemy pool. Same draw-pool pattern as projectiles — fixed-size array
+    // walked linearly each frame. Enemies share a single cube mesh; per-
+    // enemy matrices are rebuilt from position + spin each frame.
+    ShipEnemy      enemies[SHIP_VIEW_ENEMIES];
+    T3DVertPacked *enemy_mesh;
+    T3DMat4FP     *enemy_matrices;       // FB_COUNT * SHIP_VIEW_ENEMIES
+
+    // Player score: enemies destroyed since boot. Surfaced via the public
+    // accessor below so main.c can paint it on the HUD without poking at
+    // ShipView internals.
+    int            score;
 } ShipView;
 
 ShipView* ship_view_create(void);
@@ -94,5 +125,9 @@ void ship_view_fire(ShipView *sv, ProjectileType type, float aim_yaw_offset);
 // be called *after* the main scene has been rendered for this frame; this
 // function temporarily swaps the active viewport / scissor.
 void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport);
+
+// Number of enemies destroyed since the run started. main.c can render this
+// as a small HUD counter so the player has feedback for combat.
+int  ship_view_score(const ShipView *sv);
 
 #endif // SHIP_VIEW_H

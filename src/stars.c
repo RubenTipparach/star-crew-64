@@ -107,10 +107,17 @@ void stars_draw(Stars *s)
     // and alpha-compare discards the sprite's transparent pixels so each
     // billboard reads as a dot rather than an 8×8 black square. Depth is on
     // so ship geometry properly occludes the stars behind it.
+    //
+    // rdpq_set_mode_standard + rdpq_mode_aa(false) is essential here: edge
+    // antialiasing samples coverage from the surrounding (transparent) texels,
+    // which on a 1-bit-alpha cutout sprite produces a visible grey rim around
+    // every star — exactly the "transparency" artefact stars used to show.
+    rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     rdpq_mode_filter(FILTER_POINT);
     rdpq_mode_alphacompare(1);
+    rdpq_mode_aa(false);
     t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH);
 
     uint8_t last_tex = 0xFF;

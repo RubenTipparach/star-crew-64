@@ -156,6 +156,83 @@ T3DVertPacked* mesh_create_laser_cube(void)
     return verts;
 }
 
+T3DVertPacked* mesh_create_enemy_cube(int16_t half)
+{
+    T3DVertPacked* verts = malloc_uncached(sizeof(T3DVertPacked) * CUBE_VERTS);
+    const int16_t S = half;
+
+    // Two-tone palette: hot red on the underside / sides, magenta-pink on top
+    // so the player can read pitch even though the cubes don't actually pitch.
+    // Both alphas are full (these draw with RDPQ_COMBINER_FLAT, no blending).
+    uint32_t red     = 0xE03030FF;
+    uint32_t magenta = 0xFF60A0FF;
+    uint32_t dark    = 0x801010FF;
+
+    uint16_t normFront  = t3d_vert_pack_normal(&(T3DVec3){{ 0,  0,  1}});
+    uint16_t normBack   = t3d_vert_pack_normal(&(T3DVec3){{ 0,  0, -1}});
+    uint16_t normTop    = t3d_vert_pack_normal(&(T3DVec3){{ 0,  1,  0}});
+    uint16_t normBottom = t3d_vert_pack_normal(&(T3DVec3){{ 0, -1,  0}});
+    uint16_t normRight  = t3d_vert_pack_normal(&(T3DVec3){{ 1,  0,  0}});
+    uint16_t normLeft   = t3d_vert_pack_normal(&(T3DVec3){{-1,  0,  0}});
+
+    // Front (+Z) — magenta nose
+    verts[0] = (T3DVertPacked){
+        .posA = {-S, -S,  S}, .rgbaA = red,     .normA = normFront,
+        .posB = { S, -S,  S}, .rgbaB = red,     .normB = normFront,
+    };
+    verts[1] = (T3DVertPacked){
+        .posA = { S,  S,  S}, .rgbaA = magenta, .normA = normFront,
+        .posB = {-S,  S,  S}, .rgbaB = magenta, .normB = normFront,
+    };
+    // Back (-Z)
+    verts[2] = (T3DVertPacked){
+        .posA = { S, -S, -S}, .rgbaA = dark,    .normA = normBack,
+        .posB = {-S, -S, -S}, .rgbaB = dark,    .normB = normBack,
+    };
+    verts[3] = (T3DVertPacked){
+        .posA = {-S,  S, -S}, .rgbaA = magenta, .normA = normBack,
+        .posB = { S,  S, -S}, .rgbaB = magenta, .normB = normBack,
+    };
+    // Top (+Y) — solid magenta dorsal
+    verts[4] = (T3DVertPacked){
+        .posA = {-S,  S,  S}, .rgbaA = magenta, .normA = normTop,
+        .posB = { S,  S,  S}, .rgbaB = magenta, .normB = normTop,
+    };
+    verts[5] = (T3DVertPacked){
+        .posA = { S,  S, -S}, .rgbaA = magenta, .normA = normTop,
+        .posB = {-S,  S, -S}, .rgbaB = magenta, .normB = normTop,
+    };
+    // Bottom (-Y) — dark belly
+    verts[6] = (T3DVertPacked){
+        .posA = {-S, -S, -S}, .rgbaA = dark,    .normA = normBottom,
+        .posB = { S, -S, -S}, .rgbaB = dark,    .normB = normBottom,
+    };
+    verts[7] = (T3DVertPacked){
+        .posA = { S, -S,  S}, .rgbaA = dark,    .normA = normBottom,
+        .posB = {-S, -S,  S}, .rgbaB = dark,    .normB = normBottom,
+    };
+    // Right (+X)
+    verts[8] = (T3DVertPacked){
+        .posA = { S, -S,  S}, .rgbaA = red,     .normA = normRight,
+        .posB = { S, -S, -S}, .rgbaB = dark,    .normB = normRight,
+    };
+    verts[9] = (T3DVertPacked){
+        .posA = { S,  S, -S}, .rgbaA = magenta, .normA = normRight,
+        .posB = { S,  S,  S}, .rgbaB = magenta, .normB = normRight,
+    };
+    // Left (-X)
+    verts[10] = (T3DVertPacked){
+        .posA = {-S, -S, -S}, .rgbaA = dark,    .normA = normLeft,
+        .posB = {-S, -S,  S}, .rgbaB = red,     .normB = normLeft,
+    };
+    verts[11] = (T3DVertPacked){
+        .posA = {-S,  S,  S}, .rgbaA = magenta, .normA = normLeft,
+        .posB = {-S,  S, -S}, .rgbaB = magenta, .normB = normLeft,
+    };
+
+    return verts;
+}
+
 void mesh_draw_cube(T3DVertPacked *verts)
 {
     for (int face = 0; face < 6; face++) {

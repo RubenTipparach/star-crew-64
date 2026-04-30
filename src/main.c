@@ -544,7 +544,15 @@ int main(void)
         }
         if (engineering_console_repair_active(eng)) {
             rdpq_text_print(NULL, 1, line_x, line_y, "REPAIR BUFF: ALL CREW");
+            line_y += 10;
         }
+
+        // Kill counter for the corner viewport's enemy fighters. Tucked just
+        // under the corner overlay's lower edge so it reads as part of that
+        // panel rather than the bridge HUD.
+        char score[32];
+        snprintf(score, sizeof score, "KILLS: %d", ship_view_score(ship));
+        rdpq_text_print(NULL, 1, SHIP_VIEW_X, SHIP_VIEW_Y + SHIP_VIEW_HEIGHT + 12, score);
 
         // Bottom HUD: name the action of whichever P1 is doing (matches
         // pre-multiplayer behaviour for muscle memory).

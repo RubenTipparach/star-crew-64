@@ -4,14 +4,16 @@
 #include "ship_view.h"
 #include "meshes.h"  // mesh_create_laser_cube + mesh_draw_cube — shared projectile mesh
 
-// Camera distance for the corner viewport. The ship is small, so we frame it
-// from above-and-behind with a moderate FOV. Values tuned by eye against the
-// ship's WORLD_SCALE (14) in gen-ship-c.py.
-#define SV_FOV_DEG  55.0f
+// Camera distance for the corner viewport. Pulled back from the previous
+// (32, -52) framing so more of the surrounding space — stars, enemies,
+// projectile trails — is visible alongside the ship. The ship is small
+// (WORLD_SCALE 14 in gen-ship-c.py), so we keep the FOV moderate and rely
+// on distance for the wider read.
+#define SV_FOV_DEG  60.0f
 #define SV_NEAR     5.0f
-#define SV_FAR      400.0f
-#define SV_CAM_OFF_Y  32.0f
-#define SV_CAM_OFF_Z  -52.0f   // behind the ship (camera sits at ship.z - this)
+#define SV_FAR      600.0f
+#define SV_CAM_OFF_Y  56.0f
+#define SV_CAM_OFF_Z  -90.0f   // behind the ship (camera sits at ship.z - this)
 
 // Pilot-driven motion tuning.
 #define SHIP_TURN_RATE   0.02f   // radians per frame at full stick
@@ -19,15 +21,25 @@
 #define SHIP_DAMP        0.985f  // friction multiplier per frame
 #define SHIP_MAX_SPEED   1.5f
 
+// Enemy spawn shell: where freshly (re)spawned fighters appear, measured from
+// the ship. Min keeps them just outside knife-fight range so the player has
+// time to track; max keeps them inside the corner camera's frustum so they
+// actually read on screen.
+#define ENEMY_SPAWN_R_MIN  60.0f
+#define ENEMY_SPAWN_R_MAX 140.0f
+#define ENEMY_CUBE_HALF     5    // visual half-extent of the enemy cube
+
 // Star scatter — a long box ahead of and behind the camera so stars wrap as
 // the ship drifts forward. Z range chosen so even at SV_FAR the far end is
-// inside the frustum.
-#define STAR_BOX_X_HALF   180.0f
-#define STAR_BOX_Y_HALF    90.0f
-#define STAR_BOX_Z_HALF   180.0f
-#define STAR_QUAD_HALF      7    // local-space half-extent of each star quad
-                                 // (~14 units across; enlarged so stars still
-                                 // read at the bigger 120x90 viewport size)
+// inside the frustum. Expanded along with the camera pull-back so the field
+// still reaches comfortably past the new far plane.
+#define STAR_BOX_X_HALF   280.0f
+#define STAR_BOX_Y_HALF   140.0f
+#define STAR_BOX_Z_HALF   280.0f
+#define STAR_QUAD_HALF     10    // local-space half-extent of each star quad
+                                 // (~20 units across; enlarged with the
+                                 // camera pull-back so stars still read at
+                                 // the new wider framing)
 
 static ShipView sv_instance = {0};
 
@@ -137,6 +149,42 @@ static void build_star_matrix(T3DMat4FP *out, const float pos[3],
     t3d_mat4_to_fixed_3x4(out, &m);
 }
 
+// Pick a fresh world position + drift vector for an enemy. Spawns inside a
+// shell around the ship so freshly-respawned enemies don't materialise on
+// top of the player and aren't placed outside the camera's far plane.
+static void enemy_respawn(ShipEnemy *e, float ship_x, float ship_y, float ship_z)
+{
+    float u1 = frand01();
+    float u2 = frand01();
+    float u3 = frand01();
+    float theta = u1 * 6.2831853f;
+    float cos_phi = 1.0f - 2.0f * u2;
+    float sin_phi = sqrtf(1.0f - cos_phi * cos_phi);
+    float r = ENEMY_SPAWN_R_MIN
+            + (ENEMY_SPAWN_R_MAX - ENEMY_SPAWN_R_MIN) * u3;
+
+    e->x = ship_x + r * sin_phi * cosf(theta);
+    e->y = ship_y + r * cos_phi * 0.4f;   // squash vertically — stay near plane
+    e->z = ship_z + r * sin_phi * sinf(theta);
+
+    // Random drift vector with a small bias toward the ship so enemies
+    // close in over time and remain engageable rather than wandering off.
+    float dx = ship_x - e->x;
+    float dz = ship_z - e->z;
+    float dl = sqrtf(dx * dx + dz * dz);
+    if (dl > 0.001f) { dx /= dl; dz /= dl; } else { dx = 0; dz = 1; }
+
+    float jitter_x = (frand01() * 2.0f - 1.0f);
+    float jitter_z = (frand01() * 2.0f - 1.0f);
+    e->vx = (dx * 0.7f + jitter_x * 0.6f) * ENEMY_DRIFT_SPEED;
+    e->vy = (frand01() * 2.0f - 1.0f) * 0.05f;
+    e->vz = (dz * 0.7f + jitter_z * 0.6f) * ENEMY_DRIFT_SPEED;
+
+    e->hp = ENEMY_HP_MAX;
+    e->explode_timer = 0;
+    e->spin = frand01() * 6.2831853f;
+}
+
 ShipView* ship_view_create(void)
 {
     ShipView *sv = &sv_instance;
@@ -166,6 +214,17 @@ ShipView* ship_view_create(void)
         sizeof(T3DMat4FP) * FB_COUNT * SHIP_VIEW_PROJECTILES);
     for (int i = 0; i < SHIP_VIEW_PROJECTILES; i++) {
         sv->projectiles[i].timer = 0;   // inactive
+    }
+
+    sv->enemy_mesh = mesh_create_enemy_cube(ENEMY_CUBE_HALF);
+    sv->enemy_matrices = malloc_uncached(
+        sizeof(T3DMat4FP) * FB_COUNT * SHIP_VIEW_ENEMIES);
+    sv->score = 0;
+    for (int i = 0; i < SHIP_VIEW_ENEMIES; i++) {
+        // Seed a deterministic scatter around the origin (the ship's spawn
+        // position). enemy_respawn handles the per-enemy state init too, so
+        // first-frame draw() can render them without a prior update().
+        enemy_respawn(&sv->enemies[i], 0.0f, 0.0f, 0.0f);
     }
 
     build_verts(sv->verts);
@@ -298,6 +357,60 @@ void ship_view_update(ShipView *sv, int frameIdx,
             p->timer--;
         }
     }
+
+    // Tick enemies: drift, gentle damping toward the ship so they don't fly
+    // off forever, and projectile collision. An enemy in `explode_timer`
+    // mode is invulnerable and counts down to a respawn.
+    const float ENEMY_FOLLOW_GAIN = 0.0008f;
+    const float ENEMY_DAMP        = 0.992f;
+    const float HIT_R2            = ENEMY_HIT_RADIUS * ENEMY_HIT_RADIUS;
+    for (int i = 0; i < SHIP_VIEW_ENEMIES; i++) {
+        ShipEnemy *e = &sv->enemies[i];
+
+        if (e->explode_timer > 0) {
+            e->explode_timer--;
+            if (e->explode_timer == 0) {
+                enemy_respawn(e, sv->x, sv->y, sv->z);
+            }
+            continue;
+        }
+
+        // Subtle homing so the enemy doesn't drift past the engagement zone.
+        float dx = sv->x - e->x;
+        float dy = sv->y - e->y;
+        float dz = sv->z - e->z;
+        e->vx += dx * ENEMY_FOLLOW_GAIN;
+        e->vy += dy * ENEMY_FOLLOW_GAIN;
+        e->vz += dz * ENEMY_FOLLOW_GAIN;
+        e->vx *= ENEMY_DAMP;
+        e->vy *= ENEMY_DAMP;
+        e->vz *= ENEMY_DAMP;
+
+        e->x += e->vx;
+        e->y += e->vy;
+        e->z += e->vz;
+        e->spin += 0.04f;
+
+        // Collision: any active projectile within HIT_RADIUS lands a hit.
+        // Using squared distance avoids the per-pair sqrt.
+        for (int j = 0; j < SHIP_VIEW_PROJECTILES; j++) {
+            ShipProjectile *p = &sv->projectiles[j];
+            if (p->timer <= 0) continue;
+            float pdx = p->x - e->x;
+            float pdy = p->y - e->y;
+            float pdz = p->z - e->z;
+            if (pdx*pdx + pdy*pdy + pdz*pdz > HIT_R2) continue;
+
+            int dmg = (p->type == PROJ_TORPEDO) ? TORPEDO_DAMAGE : PHASER_DAMAGE;
+            e->hp -= dmg;
+            p->timer = 0;   // projectile is consumed on impact
+            if (e->hp <= 0) {
+                e->explode_timer = ENEMY_EXPLODE_FRAMES;
+                sv->score++;
+                break;       // no more projectiles can hit this corpse
+            }
+        }
+    }
 }
 
 void ship_view_fire(ShipView *sv, ProjectileType type, float aim_yaw_offset)
@@ -390,10 +503,15 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     // "stars-on-wings" with a wing-shaped halo around each cross).
     // Drawing them first without depth means the ship always overdraws
     // them cleanly.
+    rdpq_set_mode_standard();
     rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
     rdpq_mode_filter(FILTER_POINT);
     rdpq_mode_alphacompare(1);
+    // AA off: with a 1-bit-alpha cutout sprite, edge antialiasing samples
+    // coverage from the transparent surround and leaves a grey halo around
+    // every star — reads as a visible 8×8 square instead of a clean point.
+    rdpq_mode_aa(false);
     t3d_state_set_drawflags(T3D_FLAG_TEXTURED);
 
     uint8_t last_tex = 0xFF;
@@ -438,6 +556,36 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
         t3d_tri_sync();
     }
     t3d_matrix_pop(1);
+
+    // ---- Enemy fighters: vertex-coloured cubes, depth-tested. Drawn before
+    // projectiles so the projectile sprite (single prim color) doesn't have
+    // to fight to override the SHADE combiner state. Hit enemies pulse
+    // bright white via prim color while exploding.
+    rdpq_sync_pipe();
+    rdpq_mode_combiner(RDPQ_COMBINER_SHADE);
+    t3d_state_set_drawflags(T3D_FLAG_SHADED | T3D_FLAG_DEPTH);
+    for (int i = 0; i < SHIP_VIEW_ENEMIES; i++) {
+        ShipEnemy *e = &sv->enemies[i];
+
+        // While exploding: shrink the cube and tint white-hot via a quick
+        // combiner swap. Past explode_timer == 0 the enemy will respawn on
+        // the next update tick.
+        float scale = 1.0f;
+        if (e->explode_timer > 0) {
+            float t = (float)e->explode_timer / (float)ENEMY_EXPLODE_FRAMES;
+            scale = 0.4f + 0.6f * t;     // collapses inward as t → 0
+        }
+
+        int matIdx = frameIdx * SHIP_VIEW_ENEMIES + i;
+        t3d_mat4fp_from_srt_euler(&sv->enemy_matrices[matIdx],
+            (float[3]){scale, scale, scale},
+            (float[3]){0.0f, e->spin, 0.0f},
+            (float[3]){e->x, e->y, e->z}
+        );
+        t3d_matrix_push(&sv->enemy_matrices[matIdx]);
+        mesh_draw_cube(sv->enemy_mesh);
+        t3d_matrix_pop(1);
+    }
 
     // ---- Projectiles: tiny unlit cubes, depth-tested. Colour + scale per
     // type so phasers (yellow, small, fast) are visually distinct from
@@ -488,4 +636,9 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     rdpq_fill_rectangle(x0,     y1 - B, x1,     y1);       // bottom
     rdpq_fill_rectangle(x0,     y0 + B, x0 + B, y1 - B);   // left
     rdpq_fill_rectangle(x1 - B, y0 + B, x1,     y1 - B);   // right
+}
+
+int ship_view_score(const ShipView *sv)
+{
+    return sv->score;
 }
