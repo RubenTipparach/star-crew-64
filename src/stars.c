@@ -2,37 +2,16 @@
 
 #include "stars.h"
 
-// Shell geometry: stars are scattered between these two radii. The ship's
-// bounding radius is roughly 300 (30 tiles × 20 units / 2), so 350..500 puts
-// the stars comfortably outside the hull.
-#define STAR_R_MIN    300.0f
-#define STAR_R_MAX    700.0f
-#define STAR_QUAD_SZ  16      // world units per star quad — at radius 300..700
-                              // and FOV 50° this lands each quad at ~7-15 px on
-                              // screen, big enough that the 1-px bright core
-                              // and 4-px halo actually read after CI4 sampling.
+// Shell geometry: stars are scattered between these two radii. Each star is
+// drawn as a 2D sprite blit at its projected screen position, so the radius
+// only affects perspective foreshortening (parallax as the camera moves) —
+// nothing actually rendered uses the world-space size.
+#define STAR_R_MIN  300.0f
+#define STAR_R_MAX  700.0f
+#define STAR_HALF     4   // half-extent of the 8×8 sprite, used to center it
+                          // on the projected screen point
 
 static Stars stars_instance = {0};
-
-// Tiny horizontal quad lying on the XZ plane, centered on local origin so
-// the per-star translation matrix can place it directly at the world point.
-// UVs span 0..8 — matches the 8×8 star sprites exactly, no stretching.
-static void build_star_quad(T3DVertPacked *out)
-{
-    const int16_t H = STAR_QUAD_SZ / 2;
-    uint16_t nUp = t3d_vert_pack_normal(&(T3DVec3){{0, 1, 0}});
-    uint32_t white = 0xFFFFFFFF;
-    int16_t u0 = UV(0), v0 = UV(0), u1 = UV(8), v1 = UV(8);
-
-    out[0] = (T3DVertPacked){
-        .posA = {-H, 0, -H}, .rgbaA = white, .normA = nUp, .stA = {u0, v0},
-        .posB = { H, 0, -H}, .rgbaB = white, .normB = nUp, .stB = {u1, v0},
-    };
-    out[1] = (T3DVertPacked){
-        .posA = { H, 0,  H}, .rgbaA = white, .normA = nUp, .stA = {u1, v1},
-        .posB = {-H, 0,  H}, .rgbaB = white, .normB = nUp, .stB = {u0, v1},
-    };
-}
 
 // Deterministic LCG so regens of the starfield are reproducible. Seeding is
 // fixed so the positions don't shuffle between builds.
@@ -53,16 +32,11 @@ Stars* stars_create(void)
     s->textures[2] = sprite_load("rom:/star_yellow.sprite");
     s->textures[3] = sprite_load("rom:/star_red.sprite");
 
-    s->quad = malloc_uncached(sizeof(T3DVertPacked) * 2);
-    build_star_quad(s->quad);
-
-    s->matrices    = malloc_uncached(sizeof(T3DMat4FP) * STAR_COUNT);
+    s->positions   = malloc(sizeof(T3DVec3) * STAR_COUNT);
     s->tex_indices = malloc(sizeof(uint8_t) * STAR_COUNT);
 
     // Assign each star a texture type. Distribution favours white (more
-    // common visually), then a handful of blue / yellow / red accents. We
-    // lay the types out sorted so draw() can group sprite uploads without a
-    // separate sort pass.
+    // common visually), then a handful of blue / yellow / red accents.
     int idx = 0;
     const int per_type[STAR_TYPE_COUNT] = {90, 38, 22, 10};  // sums to 160
     for (int t = 0; t < STAR_TYPE_COUNT; t++) {
@@ -80,64 +54,65 @@ Stars* stars_create(void)
         float u2 = frand01();
         float u3 = frand01();
 
-        float theta = u1 * 6.2831853f;                // 0..2π azimuth
+        float theta = u1 * 6.2831853f;                 // 0..2π azimuth
         float cos_phi = 1.0f - 2.0f * u2;              // -1..1 uniform in z
         float sin_phi = sqrtf(1.0f - cos_phi * cos_phi);
         float r = STAR_R_MIN + (STAR_R_MAX - STAR_R_MIN) * u3;
 
-        float x = r * sin_phi * cosf(theta);
-        float z = r * sin_phi * sinf(theta);
-        float y = r * cos_phi;
-
-        t3d_mat4fp_from_srt_euler(
-            &s->matrices[i],
-            (float[3]){1.0f, 1.0f, 1.0f},
-            (float[3]){0.0f, 0.0f, 0.0f},
-            (float[3]){x, y, z}
-        );
+        s->positions[i].v[0] = r * sin_phi * cosf(theta);
+        s->positions[i].v[1] = r * cos_phi;
+        s->positions[i].v[2] = r * sin_phi * sinf(theta);
     }
 
     return s;
 }
 
-void stars_draw(Stars *s)
+void stars_draw(Stars *s, T3DViewport *viewport)
 {
-    // TEX_FLAT + white prim → unlit textured quads (scene lights don't wash
-    // out the starfield). Point filtering keeps the 1-pixel star cores crisp,
-    // and alpha-compare discards the sprite's transparent pixels so each
-    // billboard reads as a dot rather than an 8×8 black square. Depth is on
-    // so ship geometry properly occludes the stars behind it.
-    //
-    // rdpq_set_mode_standard() is essential here: it resets the blender to
-    // a clean (non-AA) state. Without it, residual blender state from prior
-    // draws was sampling coverage from the surrounding (transparent) texels
-    // of the 1-bit-alpha cutout sprites, producing a visible grey rim around
-    // every star — exactly the "transparency" artefact stars used to show.
+    // Stars are drawn as 2D sprite blits, not 3D textured quads. Going
+    // through the t3d 3D pipeline for cutout sprites was unreliable: the
+    // combination of TEX_FLAT + alphacompare + edge AA + textured-shaded
+    // baseline state from t3d_frame_start kept producing 8×8 squares
+    // instead of clean dots, no matter which mode bit we toggled. The 2D
+    // path (rdpq_set_mode_standard + rdpq_sprite_blit) handles transparency
+    // natively the way prompts/HUD already do, and projecting each star's
+    // 3D world position to screen with t3d_viewport_calc_viewspace_pos
+    // keeps the parallax-as-the-camera-moves look. Pattern lifted from
+    // tiny3d/examples/23_hdr/skydome.c.
     rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-    rdpq_mode_filter(FILTER_POINT);
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
     rdpq_mode_alphacompare(1);
-    t3d_state_set_drawflags(T3D_FLAG_TEXTURED | T3D_FLAG_DEPTH);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
 
-    uint8_t last_tex = 0xFF;
+    int sw = viewport->size[0];
+    int sh = viewport->size[1];
+    int ox = viewport->offset[0];
+    int oy = viewport->offset[1];
+
     for (int i = 0; i < s->num_stars; i++) {
-        uint8_t t = s->tex_indices[i];
-        if (t != last_tex) {
-            rdpq_sync_pipe();
-            rdpq_sync_tile();
-            rdpq_sprite_upload(TILE0, s->textures[t], NULL);
-            last_tex = t;
-        }
-        t3d_matrix_push(&s->matrices[i]);
-        t3d_vert_load(s->quad, 0, 4);
-        t3d_tri_draw(0, 1, 2);
-        t3d_tri_draw(0, 2, 3);
-        t3d_tri_sync();
-        t3d_matrix_pop(1);
+        // Manual perspective project: clip = matCamProj * worldPos. We need
+        // the homogeneous w too (t3d_viewport_calc_viewspace_pos throws it
+        // away), so skip stars behind the camera before dividing.
+        T3DVec4 clip;
+        t3d_mat4_mul_vec3(&clip, &viewport->matCamProj, &s->positions[i]);
+        if (clip.v[3] <= 0.001f) continue;
+
+        float ndc_x = clip.v[0] / clip.v[3];
+        float ndc_y = clip.v[1] / clip.v[3];
+        if (ndc_x < -1.0f || ndc_x > 1.0f) continue;
+        if (ndc_y < -1.0f || ndc_y > 1.0f) continue;
+
+        // NDC → pixel: x maps [-1,1] → [0,sw], y is flipped (NDC up = +y,
+        // screen y = down). Center the 8×8 sprite on the projected point.
+        int sx = (int)((ndc_x * 0.5f + 0.5f) * sw) + ox - STAR_HALF;
+        int sy = (int)((-ndc_y * 0.5f + 0.5f) * sh) + oy - STAR_HALF;
+
+        rdpq_sprite_blit(s->textures[s->tex_indices[i]], sx, sy, NULL);
     }
 
-    // Turn alpha-compare back off so later draws (level, character) don't
-    // unexpectedly clip their own pixels.
-    rdpq_mode_alphacompare(0);
+    // The 2D sprite path clobbers the t3d-required RDP mode (cycle, blender,
+    // perspective, depth, AA). Re-run t3d_frame_start so the level / panels /
+    // character that draw next get their pipeline back. This only resets RDP
+    // mode bits — the camera/viewport attachment is untouched.
+    t3d_frame_start();
 }

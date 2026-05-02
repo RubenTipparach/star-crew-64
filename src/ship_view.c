@@ -77,76 +77,12 @@ static void build_verts(T3DVertPacked *out)
     }
 }
 
-// Star quad in the camera-facing local frame: lies in the XY plane with its
-// normal at +Z. The per-star matrix orients this quad so that local +Z aims
-// at the chase camera, giving every star a true spherical billboard look
-// (rather than the old XZ-plane horizontal slab that read as edge-on lines
-// from the corner camera's downward tilt).
-static void build_star_quad(T3DVertPacked *out)
-{
-    const int16_t H = STAR_QUAD_HALF;
-    uint16_t nFwd = t3d_vert_pack_normal(&(T3DVec3){{0, 0, 1}});
-    uint32_t white = 0xFFFFFFFF;
-    int16_t u0 = UV(0), v0 = UV(0), u1 = UV(8), v1 = UV(8);
-
-    // Vertex order: bot-left, bot-right, top-right, top-left. UVs follow the
-    // same orientation so the texture's "up" lines up with local +Y.
-    out[0] = (T3DVertPacked){
-        .posA = {-H, -H, 0}, .rgbaA = white, .normA = nFwd, .stA = {u0, v1},
-        .posB = { H, -H, 0}, .rgbaB = white, .normB = nFwd, .stB = {u1, v1},
-    };
-    out[1] = (T3DVertPacked){
-        .posA = { H,  H, 0}, .rgbaA = white, .normA = nFwd, .stA = {u1, v0},
-        .posB = {-H,  H, 0}, .rgbaB = white, .normB = nFwd, .stB = {u0, v0},
-    };
-}
-
 // Deterministic LCG so the star pattern is reproducible across runs.
 static uint32_t lcg = 0x13371337u;
 static float frand01(void)
 {
     lcg = lcg * 1664525u + 1013904223u;
     return (lcg >> 8) * (1.0f / 16777216.0f);
-}
-
-// Build a 3x4 affine that places a star at `pos` and orients its local +Z
-// toward the camera (true spherical billboard). Local +X aligns with
-// (world_up × to_cam) so the texture's horizontal sits screen-horizontal,
-// and local +Y completes the right-handed basis.
-static void build_star_matrix(T3DMat4FP *out, const float pos[3],
-                              const T3DVec3 *cam)
-{
-    T3DVec3 to_cam = {{
-        cam->v[0] - pos[0],
-        cam->v[1] - pos[1],
-        cam->v[2] - pos[2],
-    }};
-    t3d_vec3_norm(&to_cam);
-
-    T3DVec3 world_up = {{0.0f, 1.0f, 0.0f}};
-    T3DVec3 right;
-    t3d_vec3_cross(&right, &world_up, &to_cam);
-    // Degenerate case: star directly above/below camera. Fall back to world
-    // +X so we at least produce a valid basis.
-    float rlen2 = right.v[0]*right.v[0] + right.v[1]*right.v[1]
-                + right.v[2]*right.v[2];
-    if (rlen2 < 1e-6f) {
-        right = (T3DVec3){{1.0f, 0.0f, 0.0f}};
-    } else {
-        t3d_vec3_norm(&right);
-    }
-
-    T3DVec3 up;
-    t3d_vec3_cross(&up, &to_cam, &right);
-
-    // Row-vector convention: row i = local axis i mapped into world.
-    T3DMat4 m = {{
-        { right.v[0],  right.v[1],  right.v[2],  0.0f },
-        { up.v[0],     up.v[1],     up.v[2],     0.0f },
-        { to_cam.v[0], to_cam.v[1], to_cam.v[2], 0.0f },
-        { pos[0],      pos[1],      pos[2],      1.0f },
-    }};
-    t3d_mat4_to_fixed_3x4(out, &m);
 }
 
 // Pick a fresh world position + drift vector for an enemy. Spawns inside a
@@ -205,8 +141,6 @@ ShipView* ship_view_create(void)
 
     sv->verts        = malloc_uncached(sizeof(T3DVertPacked) * SHIP_NUM_TRIS * 2);
     sv->matrices     = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
-    sv->star_quad    = malloc_uncached(sizeof(T3DVertPacked) * 2);
-    sv->star_matrices = malloc_uncached(sizeof(T3DMat4FP) * SHIP_VIEW_STAR_COUNT);
     sv->star_positions = malloc(sizeof(float) * 3 * SHIP_VIEW_STAR_COUNT);
     sv->star_tex_idx = malloc(sizeof(uint8_t) * SHIP_VIEW_STAR_COUNT);
     sv->proj_mesh    = mesh_create_laser_cube();   // tiny vertex-coloured cube
@@ -228,7 +162,6 @@ ShipView* ship_view_create(void)
     }
 
     build_verts(sv->verts);
-    build_star_quad(sv->star_quad);
 
     // Type distribution: heavy white, smaller helping of accents (matches
     // stars.c so the two scenes look like the same galactic neighborhood).
@@ -310,18 +243,12 @@ void ship_view_update(ShipView *sv, int frameIdx,
     // axis, so teleports happen off-screen and the player just sees an
     // infinite parallax field.
     //
-    // After wrapping, rebuild each star's matrix as a true spherical
-    // billboard aimed at the chase camera (which lives at ship + camera
-    // offset, see ship_view_draw). Cost: ~80 norm/cross/fixed-point converts
-    // per frame — well under 1ms on the N64.
+    // Stars are now drawn as 2D sprite blits (see ship_view_draw), so we no
+    // longer need to maintain a billboard matrix per star — just keep the
+    // world positions wrapped into the box around the ship for parallax.
     const float TWO_X = 2.0f * STAR_BOX_X_HALF;
     const float TWO_Y = 2.0f * STAR_BOX_Y_HALF;
     const float TWO_Z = 2.0f * STAR_BOX_Z_HALF;
-    T3DVec3 cam = {{
-        sv->x,
-        sv->y + SV_CAM_OFF_Y,
-        sv->z + SV_CAM_OFF_Z,
-    }};
     for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
         float *p = &sv->star_positions[i * 3];
 
@@ -337,8 +264,6 @@ void ship_view_update(ShipView *sv, int frameIdx,
         p[0] = sv->x + dx;
         p[1] = sv->y + dy;
         p[2] = sv->z + dz;
-
-        build_star_matrix(&sv->star_matrices[i], p, &cam);
     }
 
     t3d_mat4fp_from_srt_euler(&sv->matrices[frameIdx],
@@ -493,44 +418,48 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
     t3d_light_set_directional(0, key, &keyDir);
     t3d_light_set_count(1);
 
-    // ---- Background star billboards: unlit textured quads with alpha-test
-    // so the sprites' transparent pixels punch through to the cleared color.
-    // Same draw style as src/stars.c (TEX_FLAT + alphacompare), but with NO
-    // depth flag — stars are a skybox-style background. If we let them write
-    // depth, any star scattered between camera and ship would punch its
-    // cross-shaped pixels into the depth buffer, and the ship's wings drawn
-    // afterward would fail the depth test in those pixels (looks like
-    // "stars-on-wings" with a wing-shaped halo around each cross).
-    // Drawing them first without depth means the ship always overdraws
-    // them cleanly.
-    // rdpq_set_mode_standard() resets the blender to a clean (non-AA) state.
-    // Without it, residual blender state from prior draws was sampling
-    // coverage from the surrounding (transparent) texels of the 1-bit-alpha
-    // cutout sprites, producing a visible 8×8 grey halo around every star.
+    // ---- Background stars: 2D rdpq_sprite_blit, not 3D textured quads.
+    // Same reasoning as src/stars.c — the t3d 3D pipeline + cutout sprites +
+    // alpha-compare combo isn't reliably transparent on this libdragon
+    // build, so we project each star's world position to the corner-
+    // viewport's screen space and use the libdragon 2D sprite path that
+    // prompts/HUD already use. The rdpq_set_scissor above clips blits to
+    // the corner rect, so a star projected slightly outside the viewport
+    // simply won't draw any of its 8×8 footprint where it shouldn't.
     rdpq_set_mode_standard();
-    rdpq_mode_combiner(RDPQ_COMBINER_TEX_FLAT);
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-    rdpq_mode_filter(FILTER_POINT);
+    rdpq_mode_combiner(RDPQ_COMBINER_TEX);
     rdpq_mode_alphacompare(1);
-    t3d_state_set_drawflags(T3D_FLAG_TEXTURED);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
 
-    uint8_t last_tex = 0xFF;
+    int sw = sv->viewport.size[0];
+    int sh = sv->viewport.size[1];
+    int ox = sv->viewport.offset[0];
+    int oy = sv->viewport.offset[1];
+
     for (int i = 0; i < SHIP_VIEW_STAR_COUNT; i++) {
-        uint8_t t = sv->star_tex_idx[i];
-        if (t != last_tex) {
-            rdpq_sync_pipe();
-            rdpq_sync_tile();
-            rdpq_sprite_upload(TILE0, sv->star_textures[t], NULL);
-            last_tex = t;
-        }
-        t3d_matrix_push(&sv->star_matrices[i]);
-        t3d_vert_load(sv->star_quad, 0, 4);
-        t3d_tri_draw(0, 1, 2);
-        t3d_tri_draw(0, 2, 3);
-        t3d_tri_sync();
-        t3d_matrix_pop(1);
+        T3DVec3 wp = {{
+            sv->star_positions[i * 3 + 0],
+            sv->star_positions[i * 3 + 1],
+            sv->star_positions[i * 3 + 2],
+        }};
+        T3DVec4 clip;
+        t3d_mat4_mul_vec3(&clip, &sv->viewport.matCamProj, &wp);
+        if (clip.v[3] <= 0.001f) continue;
+
+        float ndc_x = clip.v[0] / clip.v[3];
+        float ndc_y = clip.v[1] / clip.v[3];
+        if (ndc_x < -1.0f || ndc_x > 1.0f) continue;
+        if (ndc_y < -1.0f || ndc_y > 1.0f) continue;
+
+        int sx = (int)((ndc_x * 0.5f + 0.5f) * sw) + ox - 4;
+        int sy = (int)((-ndc_y * 0.5f + 0.5f) * sh) + oy - 4;
+
+        rdpq_sprite_blit(sv->star_textures[sv->star_tex_idx[i]], sx, sy, NULL);
     }
-    rdpq_mode_alphacompare(0);
+
+    // The 2D path clobbers t3d's RDP mode (cycle, blender, persp, depth, AA).
+    // Restore it before drawing the lit ship + enemies.
+    t3d_frame_start();
 
     // ---- Ship: lit + textured.
     rdpq_sync_pipe();

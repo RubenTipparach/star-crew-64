@@ -463,7 +463,7 @@ int main(void)
         int totalLights = lighting_apply_points(lights, NUM_POINT_LIGHTS);
         lighting_finalize(totalLights);
 
-        stars_draw(stars);
+        stars_draw(stars, &camera.viewport);
         level_draw(level);
         bridge_panel_draw(helm);
         weapons_console_draw(weapons);

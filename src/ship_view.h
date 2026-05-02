@@ -65,13 +65,13 @@ typedef struct {
     sprite_t      *texture;
 
     // Background star billboards. We allocate ALL star textures (white/blue/
-    // yellow/red, sourced from cool-stuff's gen-textures.py), a shared
-    // camera-aligned quad mesh, and per-star world positions. Matrices are
-    // rebuilt every frame from positions + ship position so each star is a
-    // true spherical billboard (quad normal aimed at the corner camera).
+    // yellow/red, sourced from cool-stuff's gen-textures.py). World positions
+    // are kept wrapped into a box around the ship every frame for parallax;
+    // each star is rendered as a 2D rdpq_sprite_blit at its projected screen
+    // position (see ship_view_draw), not a 3D textured quad — same approach
+    // as stars.c, and same reason: cutout transparency through the t3d 3D
+    // pipeline isn't reliable on this libdragon build.
     sprite_t      *star_textures[SHIP_VIEW_STAR_TYPES];
-    T3DVertPacked *star_quad;      // 2 packed structs, shared across stars
-    T3DMat4FP     *star_matrices;  // SHIP_VIEW_STAR_COUNT entries
     float         *star_positions; // 3 * SHIP_VIEW_STAR_COUNT — XYZ in world
     uint8_t       *star_tex_idx;   // SHIP_VIEW_STAR_COUNT entries, into star_textures
 
