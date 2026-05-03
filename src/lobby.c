@@ -113,14 +113,17 @@ int lobby_run(int font_id)
             prev_b[i] = b_now;
         }
 
-        // P1 is the launcher and is auto-ready as soon as they're connected,
-        // so solo play just needs a connected pad + holding START. P2-P4 still
-        // opt in via A; connected-but-not-ready non-P1 pads are observers and
-        // are dropped from the launch mask. Any other-pad readies still need
-        // P1 to actually pull the trigger by holding START.
-        if (st.connected[0]) st.ready[0] = true;
-
-        start_held = st.connected[0] && in[0].btn.start != 0;
+        // No more auto-readied P1: every connected port has to opt in via
+        // A. Any ready+connected port that holds START launches the run.
+        // This means a single-controller setup on port 3 still works —
+        // port 3 readies, port 3 holds START, port 3 plays solo.
+        start_held = false;
+        for (int i = 0; i < LOBBY_MAX_PLAYERS; i++) {
+            if (st.connected[i] && st.ready[i] && in[i].btn.start != 0) {
+                start_held = true;
+                break;
+            }
+        }
         if (start_held) {
             hold_frames++;
             if (hold_frames >= LOBBY_LAUNCH_HOLD) {
@@ -128,7 +131,16 @@ int lobby_run(int font_id)
                 for (int i = 0; i < LOBBY_MAX_PLAYERS; i++) {
                     if (st.connected[i] && st.ready[i]) mask |= (1 << i);
                 }
-                if (mask == 0) mask = 1;  // safety: P1 always plays
+                // Safety: if somehow we got a 0 mask (e.g. all pads
+                // de-readied between the check above and the loop),
+                // launch with the first connected port so we still
+                // start a game rather than freezing the lobby.
+                if (mask == 0) {
+                    for (int i = 0; i < LOBBY_MAX_PLAYERS; i++) {
+                        if (st.connected[i]) { mask |= (1 << i); break; }
+                    }
+                    if (mask == 0) mask = 1;   // truly nothing connected
+                }
                 return mask;
             }
         } else {
@@ -157,10 +169,13 @@ int lobby_run(int font_id)
                      (LOBBY_LAUNCH_HOLD - hold_frames + 59) / 60);
         } else if (active == 0) {
             snprintf(footer, sizeof footer,
-                     "CONNECT P1 CONTROLLER TO LAUNCH");
+                     "CONNECT A CONTROLLER TO PLAY");
+        } else if (ready == 0) {
+            snprintf(footer, sizeof footer,
+                     "PRESS A TO READY UP  -  HOLD START TO LAUNCH");
         } else {
             snprintf(footer, sizeof footer,
-                     "READY %d/%d  -  P1 HOLD START 3s TO LAUNCH",
+                     "READY %d/%d  -  HOLD START 3s TO LAUNCH",
                      ready, active);
         }
         rdpq_text_print(NULL, font_id, 14, 224, footer);

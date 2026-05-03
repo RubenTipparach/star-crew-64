@@ -4,14 +4,15 @@
 #include "game_config.h"
 #include "weapons_panel_model.h"
 
-// Science console. The science officer manages the shield array. The full
-// vision (reallocate shields by side) is out of scope for now; this
-// implementation gives them a Guitar-Hero-style rhythm track where notes
-// scroll toward a hit line and tapping A in time charges the shield bar.
-//
-// Shield charge is in [0, 100]. Hits add `SHIELD_HIT_BONUS`; missed notes
-// (note crosses past the hit window without an A press) decay it slightly.
-// The track uses a deterministic note schedule so we don't need RNG state.
+// Science console. Manages the 6-face shield array. The rhythm track is
+// the input mechanic: notes scroll toward a hit line, A on a note adds
+// HP to whichever face science currently has selected, a missed note
+// drains it. Stick-X flicks step the selected face through the six
+// shield faces (matches the gamedesign.md table). Per-face HP lives in
+// ship_view; this console just signals hit/miss events that main.c
+// forwards via ship_view_shield_add. Console-local `shield` from the
+// pre-Phase-5 design is gone — it had nothing to track once the
+// minigame stopped owning the shield value.
 
 #define SCI_TRACK_LEN     16            // notes per loop
 #define SCI_NOTE_INTERVAL 36             // frames between note spawns (~0.6s @60fps)
@@ -20,9 +21,15 @@
 // Per-note position, in [0,1] where 1 == hit line. <0 means inactive.
 #define SCI_HIT_WINDOW    0.10f          // how close to 1.0 counts as a hit
 
-#define SHIELD_HIT_BONUS  6.0f
-#define SHIELD_MISS_PEN   2.5f
-#define SHIELD_MAX        100.0f
+// Hit/miss amounts forwarded to ship_view_shield_add for the selected
+// face. Tuning matches the original single-shield gameplay so the
+// rhythm minigame still feels meaningful.
+#define SHIELD_HIT_BONUS  6
+#define SHIELD_MISS_PEN   3
+
+// Stick-X edge threshold for face-cycling — match the engineering
+// console pattern where a flick = single step.
+#define SCI_STICK_FLICK   60.0f
 
 typedef struct {
     T3DVertPacked *verts;
@@ -42,8 +49,17 @@ typedef struct {
     bool           prev_a[4];
     bool           prev_b[4];
 
-    // Shield charge accumulator.
-    float          shield;
+    // Phase-5: which shield face the next hit/miss applies to.
+    // 0..SHIELD_FACE_COUNT-1, defaults to 0 (BOW). Cycled by stick-X.
+    int            selected_face;
+    float          prev_stick_x;
+
+    // Pending hit/miss events. Set by drive() when a note crosses the hit
+    // line; consumed by main.c, which forwards the signed amount to
+    // ship_view_shield_add(face, ±). Mirrors the weapons_console_consume_*
+    // pattern so the console stays free of ship_view dependencies.
+    int            pending_hit;    // # hits queued this frame
+    int            pending_miss;   // # misses queued this frame
 
     // Rhythm track. Each active note has a `progress` value in [0,1]; -1
     // means "slot empty". Spawn cadence is driven by `spawn_timer` and the
@@ -68,5 +84,11 @@ void science_console_update_proximity(ScienceConsole *s,
 bool science_console_blocks(const ScienceConsole *s, float wx, float wz);
 
 void science_console_draw(ScienceConsole *s);
+
+// Drain the pending hit / miss counters for this frame. Returns the
+// count and clears the field. main.c calls these and forwards the
+// signed amount to ship_view_shield_add(s->selected_face, ...).
+int  science_console_consume_hit(ScienceConsole *s);
+int  science_console_consume_miss(ScienceConsole *s);
 
 #endif // SCIENCE_CONSOLE_H

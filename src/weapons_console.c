@@ -10,9 +10,12 @@
 #define PHASER_COOLDOWN_FRAMES   12
 #define TORPEDO_COOLDOWN_FRAMES  45
 
-// Aim adjustment rate while at the gunner seat.
+// Aim adjustment rate while at the gunner seat. Phase-5 tightens the
+// firing arc to ±25°: the gunner can no longer rake fire across a wide
+// angle from a stationary ship — the helm has to rotate the whole hull
+// to bring an off-axis target into the cone.
 #define AIM_RATE   0.045f
-#define AIM_LIMIT  1.0472f      // 60° each way
+#define AIM_LIMIT  0.4363f      // 25° each way (≈ π * 25/180)
 
 // Mesh-local half-extents (WEAPONS_PANEL_POS body bounds ±10 X, ±8 Z plus a
 // 1-unit pad). The barrel pokes out the front, but we only care about the
