@@ -21,6 +21,12 @@ typedef struct {
 Character* character_create(void);
 void character_set_position(Character *c, float x, float y, float z);
 
+// Tint the torso ("shirt") of this character. The character mesh uses
+// RDPQ_COMBINER_TEX_SHADE so vertex colour multiplies the texture, which
+// lets us recolour each crew member without authoring per-player atlases.
+// Pass 255,255,255 for the default (untinted) look.
+void character_set_shirt_color(Character *c, uint8_t r, uint8_t g, uint8_t b);
+
 // Rotate toward target_yaw (radians) via shortest-arc slerp.
 // `smoothing` is a 0..1 per-frame factor: 1.0 snaps, ~0.2 is a smooth turn.
 void character_face_direction(Character *c, float target_yaw, float smoothing);

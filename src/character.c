@@ -169,6 +169,19 @@ void character_set_position(Character *c, float x, float y, float z)
     c->position = (T3DVec3){{x, y, z}};
 }
 
+void character_set_shirt_color(Character *c, uint8_t r, uint8_t g, uint8_t b)
+{
+    // Rewrite the rgbaA/rgbaB on every torso vert. The verts buffer is
+    // malloc_uncached so the RDP picks up the change on the next draw.
+    uint32_t rgba = ((uint32_t)r << 24) | ((uint32_t)g << 16) |
+                    ((uint32_t)b <<  8) | 0xFFu;
+    T3DVertPacked *torso = c->verts + IDX_TORSO * CHARACTER_PACKED_PER_PART;
+    for (int i = 0; i < CHARACTER_PACKED_PER_PART; i++) {
+        torso[i].rgbaA = rgba;
+        torso[i].rgbaB = rgba;
+    }
+}
+
 void character_face_direction(Character *c, float target_yaw, float smoothing)
 {
     const float pi    = 3.1415927f;

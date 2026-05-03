@@ -59,8 +59,11 @@ ScienceConsole* science_console_create(float x, float z, float facing_yaw)
         s->half_x = ca * LOCAL_HALF_X + sa * LOCAL_HALF_Z;
         s->half_z = sa * LOCAL_HALF_X + ca * LOCAL_HALF_Z;
     }
-    s->shield = 35.0f;     // start a bit charged so the bar is visible
-    s->spawn_timer = 0;
+    s->selected_face = 0;       // BOW by default
+    s->prev_stick_x  = 0.0f;
+    s->pending_hit   = 0;
+    s->pending_miss  = 0;
+    s->spawn_timer   = 0;
     s->feedback_timer = 0;
     for (int i = 0; i < SCI_TRACK_LEN; i++) s->notes[i] = -1.0f;
     for (int i = 0; i < 4; i++) { s->prev_a[i] = false; s->prev_b[i] = false; }
@@ -159,6 +162,17 @@ bool science_console_drive(ScienceConsole *s, int pid, joypad_inputs_t inputs)
         return false;
     }
 
+    // Phase-5 face cycling: stick-X flick steps the selected_face. Edge-
+    // detected via prev_stick_x so a held stick = single step. SHIELD_FACE_COUNT
+    // is 6, ordered BOW / STERN / PORT / STARBOARD / DORSAL / VENTRAL.
+    float sx = (float)inputs.stick_x;
+    if (sx > SCI_STICK_FLICK && s->prev_stick_x <= SCI_STICK_FLICK) {
+        s->selected_face = (s->selected_face + 1) % 6;
+    } else if (sx < -SCI_STICK_FLICK && s->prev_stick_x >= -SCI_STICK_FLICK) {
+        s->selected_face = (s->selected_face + 5) % 6;   // -1 mod 6
+    }
+    s->prev_stick_x = sx;
+
     // Spawn cadence.
     s->spawn_timer++;
     if (s->spawn_timer >= SCI_NOTE_INTERVAL) {
@@ -167,33 +181,30 @@ bool science_console_drive(ScienceConsole *s, int pid, joypad_inputs_t inputs)
     }
 
     // Advance every active note. Notes that pass the hit window without an
-    // A press are counted as misses on the same frame they expire.
+    // A press are counted as misses on the same frame they expire — queued
+    // for main.c to forward to ship_view_shield_add(selected_face, -PEN).
     const float step = 1.0f / (float)SCI_NOTE_TRAVEL;
     for (int i = 0; i < SCI_TRACK_LEN; i++) {
         if (s->notes[i] < 0.0f) continue;
         s->notes[i] += step;
         if (s->notes[i] > 1.0f + SCI_HIT_WINDOW) {
-            // Missed window.
             s->notes[i] = -1.0f;
-            s->shield -= SHIELD_MISS_PEN;
-            if (s->shield < 0.0f) s->shield = 0.0f;
+            s->pending_miss++;
             s->feedback_timer = -FEEDBACK_FLASH_FRAMES;
         }
     }
 
-    // A press: hit the closest note in the hit window if any.
+    // A press: hit the closest note in the hit window if any. Queue a hit
+    // event for main.c to forward; an A press with no note in window is a
+    // soft miss so spamming A doesn't trivialise the minigame.
     if (a_pressed) {
         int idx = find_hittable_note(s);
         if (idx >= 0) {
             s->notes[idx] = -1.0f;
-            s->shield += SHIELD_HIT_BONUS;
-            if (s->shield > SHIELD_MAX) s->shield = SHIELD_MAX;
+            s->pending_hit++;
             s->feedback_timer = FEEDBACK_FLASH_FRAMES;
         } else {
-            // Missed press (no note in window) — small penalty so spamming
-            // A doesn't trivialise the minigame.
-            s->shield -= SHIELD_MISS_PEN * 0.5f;
-            if (s->shield < 0.0f) s->shield = 0.0f;
+            s->pending_miss++;
             s->feedback_timer = -FEEDBACK_FLASH_FRAMES;
         }
     }
@@ -224,6 +235,20 @@ bool science_console_blocks(const ScienceConsole *s, float wx, float wz)
     if (dx < 0) dx = -dx;
     if (dz < 0) dz = -dz;
     return dx <= s->half_x && dz <= s->half_z;
+}
+
+int science_console_consume_hit(ScienceConsole *s)
+{
+    int n = s->pending_hit;
+    s->pending_hit = 0;
+    return n;
+}
+
+int science_console_consume_miss(ScienceConsole *s)
+{
+    int n = s->pending_miss;
+    s->pending_miss = 0;
+    return n;
 }
 
 void science_console_draw(ScienceConsole *s)
