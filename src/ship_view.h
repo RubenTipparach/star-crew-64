@@ -152,19 +152,29 @@ typedef enum {
     PROJ_ENEMY_BULLET = 2,
 } ProjectileType;
 
-// Tiny "spark" pool used for the hit-impact FX. When a player projectile
-// connects with an enemy, we burst a handful of these at the hit point;
-// each ticks down over HIT_PARTICLE_LIFE frames, drifting on its seeded
-// velocity, and renders as a small bright cube. Pool is fixed-size and
-// scanned linearly on spawn — same pattern as the projectile pool.
-#define HIT_PARTICLE_COUNT       32
-#define HIT_PARTICLE_LIFE        18      // ~0.3 s at 60 Hz
-#define HIT_PARTICLES_PER_BURST   6
-#define HIT_PARTICLE_SPEED        0.9f
+// Particle pool used for two FX:
+//   - Hit spark   — small yellow burst when a player projectile connects
+//                   (HIT_PARTICLES_PER_BURST particles, short life, small).
+//   - Death blast — bigger fireball when an enemy is destroyed
+//                   (DEATH_PARTICLES_PER_BURST particles, longer life,
+//                   larger initial scale).
+// Both share the same pool; per-particle max_life + scale0 let the
+// renderer ramp size correctly regardless of which burst seeded it.
+// Pool is fixed-size and scanned linearly on spawn.
+#define HIT_PARTICLE_COUNT         64
+#define HIT_PARTICLE_LIFE          18    // ~0.3 s at 60 Hz
+#define HIT_PARTICLES_PER_BURST     6
+#define HIT_PARTICLE_SPEED          0.9f
+#define DEATH_PARTICLE_LIFE        32    // ~0.55 s — fireball lingers
+#define DEATH_PARTICLES_PER_BURST  18    // dense burst so it reads as "boom"
+#define DEATH_PARTICLE_SPEED        1.6f // wider spread than the hit burst
+#define DEATH_PARTICLE_SCALE        0.95f // initial cube scale at full life
 typedef struct {
     float x, y, z;
     float vx, vy, vz;
-    int   life;       // > 0 = active; counts down each frame
+    int   life;        // > 0 = active; counts down each frame
+    int   max_life;    // life value at spawn — used for the size ramp
+    float scale0;      // initial cube scale at full life
 } HitParticle;
 
 // Enemy AI state machine. See gamedesign.md "Enemy AI" section. State

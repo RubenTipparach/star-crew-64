@@ -203,16 +203,15 @@ static void enemy_dummy_spawn(ShipEnemy *e, int idx,
     e->no_respawn   = false;       // overridden by ship_view_set_mission
 }
 
-// Spawn a small burst of "spark" particles at (px,py,pz). Used by the
-// player-projectile collision path so each hit produces visible feedback —
-// HIT_PARTICLES_PER_BURST particles fly outward on a random unit vector
-// scaled by HIT_PARTICLE_SPEED and tick down over HIT_PARTICLE_LIFE frames.
-// Particles past their life or evicted by another spawn are skipped on
-// render. Pool is fixed-size; we scan linearly for free slots.
-static void hit_burst_spawn(ShipView *sv, float px, float py, float pz)
+// Shared particle-burst helper. Walks the pool linearly looking for free
+// slots and seeds up to `count` particles in a random spherical spread
+// at (px,py,pz). Per-particle `life`, `max_life`, and `scale0` let the
+// renderer pick the right size ramp regardless of which call seeded it.
+static void particle_burst(ShipView *sv, float px, float py, float pz,
+                           int count, int life_frames, float speed, float scale0)
 {
     int spawned = 0;
-    for (int i = 0; i < HIT_PARTICLE_COUNT && spawned < HIT_PARTICLES_PER_BURST; i++) {
+    for (int i = 0; i < HIT_PARTICLE_COUNT && spawned < count; i++) {
         HitParticle *hp = &sv->hit_particles[i];
         if (hp->life > 0) continue;
         float u1 = frand01();
@@ -223,12 +222,32 @@ static void hit_burst_spawn(ShipView *sv, float px, float py, float pz)
         hp->x = px;
         hp->y = py;
         hp->z = pz;
-        hp->vx = sin_phi * cosf(theta) * HIT_PARTICLE_SPEED;
-        hp->vy = cos_phi               * HIT_PARTICLE_SPEED;
-        hp->vz = sin_phi * sinf(theta) * HIT_PARTICLE_SPEED;
-        hp->life = HIT_PARTICLE_LIFE;
+        hp->vx = sin_phi * cosf(theta) * speed;
+        hp->vy = cos_phi               * speed;
+        hp->vz = sin_phi * sinf(theta) * speed;
+        hp->life     = life_frames;
+        hp->max_life = life_frames;
+        hp->scale0   = scale0;
         spawned++;
     }
+}
+
+// Hit spark — small yellow puff for each projectile-on-enemy connection.
+static void hit_burst_spawn(ShipView *sv, float px, float py, float pz)
+{
+    particle_burst(sv, px, py, pz,
+                   HIT_PARTICLES_PER_BURST, HIT_PARTICLE_LIFE,
+                   HIT_PARTICLE_SPEED, 0.30f);
+}
+
+// Death blast — bigger, slower fireball when an enemy reaches zero HP.
+// Wider spread, longer life, and a hefty starting scale so it reads as
+// "they blew up" rather than "they took another hit."
+static void death_burst_spawn(ShipView *sv, float px, float py, float pz)
+{
+    particle_burst(sv, px, py, pz,
+                   DEATH_PARTICLES_PER_BURST, DEATH_PARTICLE_LIFE,
+                   DEATH_PARTICLE_SPEED, DEATH_PARTICLE_SCALE);
 }
 
 // Phase-8: spawn a capital ship for the mission roster. Larger orbit
@@ -648,6 +667,7 @@ void ship_view_update(ShipView *sv, int frameIdx,
                 p->timer = 0;
                 if (e->hp <= 0) {
                     e->explode_timer = ENEMY_EXPLODE_FRAMES;
+                    death_burst_spawn(sv, e->x, e->y, e->z);
                     sv->score++;
                     break;
                 }
@@ -807,6 +827,7 @@ void ship_view_update(ShipView *sv, int frameIdx,
             p->timer = 0;   // projectile is consumed on impact
             if (e->hp <= 0) {
                 e->explode_timer = ENEMY_EXPLODE_FRAMES;
+                death_burst_spawn(sv, e->x, e->y, e->z);
                 sv->score++;
                 break;       // no more projectiles can hit this corpse
             }
@@ -1165,20 +1186,24 @@ void ship_view_draw(ShipView *sv, int frameIdx, T3DViewport *main_viewport)
         t3d_matrix_pop(1);
     }
 
-    // ---- Hit-impact sparks: tiny bright cubes shrinking with their
-    // remaining life. Same FLAT combiner the projectiles use; we just
-    // change prim color (orange→yellow ramp) and scale per particle.
+    // ---- Hit-impact sparks + death-blast fireballs share the same pool.
+    // Per-particle max_life + scale0 let big death particles fade over a
+    // longer ramp than small hit sparks even though both run through this
+    // single render pass. Same FLAT combiner the projectiles use.
     for (int i = 0; i < HIT_PARTICLE_COUNT; i++) {
         HitParticle *hp = &sv->hit_particles[i];
         if (hp->life <= 0) continue;
-        float t = (float)hp->life / (float)HIT_PARTICLE_LIFE;
-        // Hot yellow at spawn, fading to deep orange before vanishing.
+        int max_life = hp->max_life > 0 ? hp->max_life : HIT_PARTICLE_LIFE;
+        float t = (float)hp->life / (float)max_life;
+        // White-hot at spawn, fading through yellow, orange, deep red.
+        // Bigger particles (death burst) read as fire because their longer
+        // life keeps them in the orange band for more frames.
         uint8_t r = 255;
-        uint8_t g = (uint8_t)(80.0f + 175.0f * t);
-        uint8_t b = (uint8_t)(40.0f * t);
+        uint8_t g = (uint8_t)(50.0f + 200.0f * t);
+        uint8_t b = (uint8_t)(30.0f * t * t);     // squared so it darkens fast
         rdpq_set_prim_color(RGBA32(r, g, b, 255));
-        // Shrink from 0.30 down to ~0 over the particle's life.
-        float scale = 0.30f * t;
+        // Shrink from scale0 down to ~0 over the particle's life.
+        float scale = hp->scale0 * t;
         if (scale < 0.05f) scale = 0.05f;
 
         int matIdx = frameIdx * HIT_PARTICLE_COUNT + i;
