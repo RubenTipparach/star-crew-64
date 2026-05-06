@@ -180,6 +180,19 @@ Level* level_load(const char *rom_path)
         lv->tiles[i] = (TileType)buf[tile_offset + i];
     }
 
+    // Preserve the entity array for runtime scanning (Phase-7
+    // extinguisher pickup, future event triggers). memcpy out of the
+    // I/O buffer so we can free buf later.
+    lv->num_entities = num_entities;
+    lv->entities     = NULL;
+    if (num_entities > 0) {
+        lv->entities = malloc(sizeof(LevelEntity) * num_entities);
+        assertf(lv->entities != NULL,
+                "level_load: out of memory for %d entities", num_entities);
+        memcpy(lv->entities, buf + ent_offset,
+               sizeof(LevelEntity) * num_entities);
+    }
+
     // Scan entities for a "spawn" marker. First match wins.
     lv->has_spawn = false;
     lv->spawn_wx = 0.0f;
@@ -192,6 +205,39 @@ Level* level_load(const char *rom_path)
                           &lv->spawn_wx, &lv->spawn_wz);
             lv->has_spawn = true;
             break;
+        }
+    }
+
+    // Phase-7 v2 trailer: rooms metadata + per-cell room id. Pre-v2 files
+    // simply have no trailer; we degrade to num_rooms=0 + an all-0xFF
+    // cell map so level_room_at always returns LEVEL_ROOM_NONE.
+    int trailer_offset = ent_offset + num_entities * (int)sizeof(LevelEntity);
+    lv->num_rooms     = 0;
+    lv->rooms         = NULL;
+    lv->cell_room_id  = malloc(tile_count);
+    assertf(lv->cell_room_id != NULL,
+            "level_load: out of memory for cell_room_id (%d bytes)", tile_count);
+    memset(lv->cell_room_id, LEVEL_ROOM_NONE, tile_count);
+
+    if (hdr->version >= 2 && trailer_offset + 4 <= size) {
+        int nrooms = buf[trailer_offset];
+        // 3 bytes pad after the count
+        int rooms_offset = trailer_offset + 4;
+        int rooms_bytes  = nrooms * (int)sizeof(LevelRoomRecord);
+        int cell_offset  = rooms_offset + rooms_bytes;
+        if (nrooms > 0 && cell_offset + tile_count <= size) {
+            lv->num_rooms = nrooms;
+            lv->rooms = malloc(sizeof(LevelRoom) * nrooms);
+            assertf(lv->rooms != NULL, "level_load: out of memory for rooms");
+            for (int i = 0; i < nrooms; i++) {
+                const LevelRoomRecord *src = (const LevelRoomRecord*)
+                    (buf + rooms_offset + i * sizeof(LevelRoomRecord));
+                lv->rooms[i].id = src->id;
+                memcpy(lv->rooms[i].name, src->name, LVL_ROOM_NAME_LEN);
+                // ensure NUL-termination in the runtime copy
+                lv->rooms[i].name[LVL_ROOM_NAME_LEN] = '\0';
+            }
+            memcpy(lv->cell_room_id, buf + cell_offset, tile_count);
         }
     }
 
@@ -311,4 +357,14 @@ bool level_is_walkable(const Level *lv, float wx, float wz)
     int col = (int)floorf(wx / (float)TILE_SIZE + lv->grid_w * 0.5f);
     int row = (int)floorf(wz / (float)TILE_SIZE + lv->grid_h * 0.5f);
     return level_tile_at(lv, col, row) != TILE_NONE;
+}
+
+uint8_t level_room_at(const Level *lv, float wx, float wz)
+{
+    if (!lv || !lv->cell_room_id) return LEVEL_ROOM_NONE;
+    int col = (int)floorf(wx / (float)TILE_SIZE + lv->grid_w * 0.5f);
+    int row = (int)floorf(wz / (float)TILE_SIZE + lv->grid_h * 0.5f);
+    if (col < 0 || col >= lv->grid_w) return LEVEL_ROOM_NONE;
+    if (row < 0 || row >= lv->grid_h) return LEVEL_ROOM_NONE;
+    return lv->cell_room_id[row * lv->grid_w + col];
 }

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "game_config.h"
+#include "level_format.h"
 
 // Each floor tile is a flat textured quad on the XZ plane.
 #define TILE_SIZE       20   // world units per tile (character is ~16 tall, so 2m squares)
@@ -26,6 +27,16 @@ typedef struct {
     uint8_t   tile_type;     // the cell the wall belongs to — picks the texture
 } Wall;
 
+// Room metadata. Mirrors level_format.h's LevelRoom but in runtime-friendly
+// form (NUL-terminated name, cached for printf). Used by the fire system to
+// drive per-room state.
+#define LEVEL_ROOM_NAME_LEN 16        // 15 chars + NUL
+typedef struct {
+    uint8_t id;
+    char    name[LEVEL_ROOM_NAME_LEN];
+} LevelRoom;
+#define LEVEL_ROOM_NONE 0xFFu
+
 typedef struct {
     T3DVertPacked *quad;                                  // 2 packed structs = 4 verts, one tile-sized quad
     T3DVertPacked *wall_quad;                             // 2 packed structs = 4 verts, one wall-sized vertical quad
@@ -42,6 +53,19 @@ typedef struct {
     bool           has_spawn;
     float          spawn_wx;
     float          spawn_wz;
+    // Room metadata (v2 .lvl trailer). num_rooms == 0 means the file
+    // pre-dates the rooms feature; cell_room_id is then a flat 0xFF
+    // array. Indexed by row*grid_w+col.
+    int            num_rooms;
+    LevelRoom     *rooms;
+    uint8_t       *cell_room_id;
+    // Entity records preserved from the .lvl, so runtime systems
+    // (Phase-7 extinguisher pickup placement, future scriptable
+    // events) can scan them by group name. Coordinates are still in
+    // cell-units; multiply by TILE_SIZE / use cell_to_world for world
+    // positions.
+    int            num_entities;
+    LevelEntity   *entities;
 } Level;
 
 // Load and construct a level from a .lvl file in the ROM filesystem (DFS).
@@ -62,5 +86,9 @@ TileType level_tile_at(const Level *level, int col, int row);
 // Returns true if the cell containing the world-space point (wx, wz) is a
 // walkable (non-empty) tile. Used for character-vs-map collision in main.c.
 bool level_is_walkable(const Level *level, float wx, float wz);
+
+// Returns the room id covering the world-space point, or LEVEL_ROOM_NONE
+// (0xFF) for hallway / out-of-bounds / pre-v2 levels with no rooms data.
+uint8_t level_room_at(const Level *level, float wx, float wz);
 
 #endif // LEVEL_H

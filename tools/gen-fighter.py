@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""
+Generate the enemy-fighter mesh.
+
+Writes:
+  - assets/models/fighter.obj   (canonical baked source-of-truth, per CLAUDE.md)
+  - assets/models/fighter.json  (sidecar for the model editor / C baker —
+                                 holds per-face vertex colours since the
+                                 fighter renders with SHADE-only — no texture)
+
+The fighter is a hostile-red dart: pointed nose at +Z, swept wings flaring
+back to -Z, slim diamond cross-section. Authored at ~1m long; the C baker
+scales by FIGHTER_WORLD_SCALE for runtime use.
+
+Per-face colour palette is encoded in the JSON sidecar so the C baker can
+emit per-vertex rgba alongside positions/normals — no texture is sampled
+at runtime, the SHADE-only combiner just modulates these colours by the
+directional light, same as the main ship's lighting set-up minus the
+texture lookup.
+"""
+
+import json
+import os
+
+GRID = 0.05
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT_OBJ  = os.path.join(ROOT, "assets", "models", "fighter.obj")
+OUT_JSON = os.path.join(ROOT, "assets", "models", "fighter.json")
+
+# Per-face colour palette. The fighter reads "menacing alien" — hot reds for
+# the nose and dorsal, deeper crimsons for the underside, near-black for the
+# rear thruster face so the silhouette "feels" angled. RGBA8 hex strings.
+COL_NOSE      = "FF6040FF"   # magenta-orange — bright leading edge
+COL_TOP       = "E03028FF"   # mid red — dorsal panels
+COL_BELLY     = "601010FF"   # deep red — underside
+COL_WING_TOP  = "FF8050FF"   # warmer than the body so wings read distinctly
+COL_WING_BOT  = "501008FF"   # almost-black under-wing for shadow contrast
+COL_THRUSTER  = "201020FF"   # near-black thruster face (back)
+COL_SIDE      = "B02020FF"   # body sides — warm-red metallic
+
+
+def quad(face_list, vi, color):
+    face_list.append((list(vi), color))
+
+
+def main() -> None:
+    # Slim dart along +Z. Smaller than the ship.obj (~1m long, ~0.7m wing-to-
+    # wing). Y-axis is up; the ship sits on its belly slightly below origin so
+    # it composes well against the radar's chase camera.
+    verts = [
+        # Tail block (where the thruster lives): 0..3, viewed from -Z
+        [-0.18, -0.06, -0.45],   # 0 tail-bot-left
+        [ 0.18, -0.06, -0.45],   # 1 tail-bot-right
+        [ 0.18,  0.10, -0.45],   # 2 tail-top-right
+        [-0.18,  0.10, -0.45],   # 3 tail-top-left
+        # Mid section (wing root): 4..7
+        [-0.22, -0.06, -0.05],   # 4
+        [ 0.22, -0.06, -0.05],   # 5
+        [ 0.22,  0.12, -0.05],   # 6
+        [-0.22,  0.12, -0.05],   # 7
+        # Nose tip: a thin diamond pinched to a point at +Z
+        [ 0.00, -0.02,  0.50],   # 8 nose-bot
+        [ 0.00,  0.08,  0.50],   # 9 nose-top
+        # Wing tips: swept back, slightly above the belly so the silhouette
+        # has a delta-wing read.
+        [-0.55,  0.02, -0.30],   # 10 wing-l-front
+        [-0.55,  0.06, -0.42],   # 11 wing-l-rear
+        [ 0.55,  0.02, -0.30],   # 12 wing-r-front
+        [ 0.55,  0.06, -0.42],   # 13 wing-r-rear
+    ]
+
+    # Each face is a quad of vertex indices + flat colour. The bake script
+    # triangulates and assigns the colour to all 6 verts of the resulting
+    # two tris.
+    faces: list = []
+
+    # Tail thruster face (-Z): near-black so the back glows dim against space.
+    quad(faces, [0, 1, 2, 3], COL_THRUSTER)
+
+    # Top hull: tail->mid (panel) and mid->nose (pinches to the diamond top).
+    quad(faces, [3, 2, 6, 7], COL_TOP)
+    # Mid->nose top: 7,6 → 9 (point). Authored as a degenerate quad so the
+    # bake's quad → 2-tri split still yields one valid tri + one collapsed.
+    quad(faces, [7, 6, 9, 9], COL_NOSE)
+
+    # Bottom hull: tail->mid and mid->nose-belly. Same degenerate trick at
+    # the nose.
+    quad(faces, [4, 5, 1, 0], COL_BELLY)
+    quad(faces, [8, 8, 5, 4], COL_BELLY)
+
+    # Body sides — warm red metallic. Tail->mid plus a triangular nose flare.
+    quad(faces, [0, 3, 7, 4], COL_SIDE)        # left tail->mid
+    quad(faces, [4, 7, 9, 8], COL_NOSE)        # left mid->nose
+    quad(faces, [1, 5, 6, 2], COL_SIDE)        # right tail->mid
+    quad(faces, [5, 8, 9, 6], COL_NOSE)        # right mid->nose
+
+    # Wings: slight delta sweep. Top + bottom faces per wing so both sides
+    # shade. Authored CCW from the outside so the bake's normal flip-test
+    # picks the right face.
+    quad(faces, [11, 7, 4, 10], COL_WING_TOP)  # left wing top
+    quad(faces, [10, 4, 7, 11], COL_WING_BOT)  # left wing bottom
+    quad(faces, [6, 13, 12, 5], COL_WING_TOP)  # right wing top
+    quad(faces, [5, 12, 13, 6], COL_WING_BOT)  # right wing bottom
+
+    # Snap to GRID.
+    def snap(v):
+        return round(round(v / GRID) * GRID, 4)
+    verts = [[snap(c) for c in v] for v in verts]
+
+    # ---- Write OBJ. Geometry only — colours live in the JSON sidecar.
+    os.makedirs(os.path.dirname(OUT_OBJ), exist_ok=True)
+    with open(OUT_OBJ, "w") as f:
+        f.write("# fighter.obj — generated by tools/gen-fighter.py\n")
+        f.write("# Per-face colours live in fighter.json (no texture).\n")
+        f.write("o fighter\n")
+        for v in verts:
+            f.write(f"v {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}\n")
+        for vi, _ in faces:
+            # Two tris per quad. Degenerate quads (two repeated indices in a
+            # row) collapse one of the tris to zero-area; the C baker filters
+            # those out so they don't waste a draw call.
+            f.write(f"f {vi[0]+1} {vi[1]+1} {vi[2]+1}\n")
+            f.write(f"f {vi[0]+1} {vi[2]+1} {vi[3]+1}\n")
+
+    sidecar = {
+        "name": "fighter",
+        "grid": GRID,
+        "vertices": verts,
+        "faces": [
+            {"vertices": vi, "color": col}
+            for vi, col in faces
+        ],
+    }
+    with open(OUT_JSON, "w") as f:
+        json.dump(sidecar, f, indent=2)
+
+    print(f"wrote {OUT_OBJ}  ({len(verts)} verts, {len(faces)} quads)")
+    print(f"wrote {OUT_JSON}")
+
+
+if __name__ == "__main__":
+    main()

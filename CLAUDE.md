@@ -56,3 +56,23 @@ user to drop into the repo. Keep them in mind whenever a task involves
   (`levels/*.json` → `filesystem/*.lvl`); never read JSON at runtime.
 - Procedural fallbacks (e.g. the walk-cycle blend in `character.c`) are
   layered on top of baked data, not replacements for it.
+
+## UI text spacing
+
+The framebuffer is 320×240 and `rdpq_text_print` does not auto-wrap or
+clip — overlapping draws blend on top of each other and produce the
+garbled stripes seen on the mission-select screen when cards collided
+with the blurb line. When laying out 2D screens (lobby, mission select,
+overlays, win/loss banners):
+
+- Reserve dedicated y-bands for each text element and verify the bands
+  don't overlap: title (~y=20–44), body/cards (mid-screen), blurb
+  (~y=195–210), footer/prompt (~y=220–232). Don't draw text inside a
+  card rect that another text line will also occupy.
+- For variable-count card lists (e.g. mission list), recompute the
+  total stack height (`N * (CARD_H + CARD_GAP) - CARD_GAP`) when the
+  count changes and shrink `CARD_H`/`CARD_GAP` so the last card ends
+  before the blurb's y. Don't assume a fixed count fits.
+- Multiplayer-input menus (post-lobby screens like mission select) must
+  poll *every* connected `JOYPAD_PORT_*`, not just port 1 — a player
+  who readied solo on port 3 still has to drive the menu.

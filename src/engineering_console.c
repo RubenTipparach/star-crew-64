@@ -68,6 +68,13 @@ EngineeringConsole* engineering_console_create(float x, float z, float facing_ya
     e->stick_x_prev = 0.0f;
     e->repair_buff_frames = 0;
     e->repair_cooldown = 0;
+    e->repair_target = 0;
+    e->repairing = false;
+    e->repair_acc = 0.0f;
+    e->repair_stick_x_prev = 0.0f;
+    e->vent_cooldown = 0;
+    e->vent_request = false;
+    for (int i = 0; i < 4; i++) e->prev_c_down[i] = false;
     for (int i = 0; i < 4; i++) { e->prev_a[i] = false; e->prev_b[i] = false; }
     // Default to an even split so the systems read as balanced at start.
     e->energy[ENG_ENGINES] = 33.0f;
@@ -185,26 +192,63 @@ bool engineering_console_drive(EngineeringConsole *e, int pid, joypad_inputs_t i
     if (sy < -1.0f) sy = -1.0f;
     if (sy >  1.0f) sy =  1.0f;
 
-    // Edge-detected slot navigation: stick moves left/right past a threshold
-    // selects the next/previous slot; release back below threshold to re-arm.
-    if (e->stick_x_prev <= STICK_NAV_THRESHOLD && sx > STICK_NAV_THRESHOLD) {
-        e->selected = (e->selected + 1) % ENG_NUM_SYSTEMS;
-    } else if (e->stick_x_prev >= -STICK_NAV_THRESHOLD && sx < -STICK_NAV_THRESHOLD) {
-        e->selected = (e->selected + ENG_NUM_SYSTEMS - 1) % ENG_NUM_SYSTEMS;
-    }
-    e->stick_x_prev = sx;
+    // Phase-6: Z held → repair mode. While repairing, energy
+    // redistribution is suspended (the engineer commits to one job at a
+    // time) and stick-X cycles repair_target across the four stations
+    // instead of cycling the energy slot. main.c reads repairing +
+    // repair_target after drive() and forwards the per-frame integer
+    // amount to ship_view_repair_station via consume_repair below.
+    bool z_now = inputs.btn.z != 0;
+    e->repairing = z_now;
 
-    // Stick Y pumps power into the selected slot.
-    if (fabsf(sy) > 0.1f) {
-        rebalance_energy(e, e->selected, sy * ENERGY_PUMP_RATE);
+    if (e->repairing) {
+        // Edge-detected target navigation. Resets the energy slot's
+        // own stick edge tracker so leaving repair mode doesn't fire a
+        // ghost slot-change.
+        if (e->repair_stick_x_prev <= STICK_NAV_THRESHOLD && sx > STICK_NAV_THRESHOLD) {
+            e->repair_target = (e->repair_target + 1) % 4;
+        } else if (e->repair_stick_x_prev >= -STICK_NAV_THRESHOLD && sx < -STICK_NAV_THRESHOLD) {
+            e->repair_target = (e->repair_target + 3) % 4;
+        }
+        e->repair_stick_x_prev = sx;
+        e->stick_x_prev = sx;     // suppress slot-change on Z release
+    } else {
+        // Edge-detected slot navigation: stick moves left/right past a threshold
+        // selects the next/previous slot; release back below threshold to re-arm.
+        if (e->stick_x_prev <= STICK_NAV_THRESHOLD && sx > STICK_NAV_THRESHOLD) {
+            e->selected = (e->selected + 1) % ENG_NUM_SYSTEMS;
+        } else if (e->stick_x_prev >= -STICK_NAV_THRESHOLD && sx < -STICK_NAV_THRESHOLD) {
+            e->selected = (e->selected + ENG_NUM_SYSTEMS - 1) % ENG_NUM_SYSTEMS;
+        }
+        e->stick_x_prev = sx;
+        e->repair_stick_x_prev = sx;
+
+        // Stick Y pumps power into the selected slot. Locked while repairing.
+        if (fabsf(sy) > 0.1f) {
+            rebalance_energy(e, e->selected, sy * ENERGY_PUMP_RATE);
+        }
     }
 
-    // A press fires a repair pulse if cooldown allows.
+    // A press fires a repair pulse if cooldown allows. Independent of
+    // repair mode — the pulse is officer-healing, repair mode is
+    // station-healing.
     if (e->repair_buff_frames > 0) e->repair_buff_frames--;
     if (e->repair_cooldown > 0)    e->repair_cooldown--;
     if (a_pressed && e->repair_cooldown == 0) {
         e->repair_buff_frames = ENG_REPAIR_BUFF_FRAMES;
         e->repair_cooldown    = ENG_REPAIR_COOLDOWN;
+    }
+
+    // Phase-7 vent: edge-detected C-down latches a vent request when
+    // the cooldown is clear. main.c drains the request via
+    // engineering_console_consume_vent and resolves the room/damage.
+    if (e->vent_cooldown > 0) e->vent_cooldown--;
+    bool cd_now = inputs.btn.c_down != 0;
+    bool cd_pressed = cd_now && !e->prev_c_down[pid];
+    e->prev_c_down[pid] = cd_now;
+    if (cd_pressed && e->vent_cooldown == 0) {
+        e->vent_request  = true;
+        e->vent_cooldown = ENG_VENT_COOLDOWN;
     }
 
     return true;
@@ -236,6 +280,35 @@ bool engineering_console_blocks(const EngineeringConsole *e, float wx, float wz)
 bool engineering_console_repair_active(const EngineeringConsole *e)
 {
     return e->repair_buff_frames > 0;
+}
+
+bool engineering_console_consume_vent(EngineeringConsole *e)
+{
+    bool v = e->vent_request;
+    e->vent_request = false;
+    return v;
+}
+
+// Per-frame integer station repair amount. Base rate is 5 HP/sec at
+// the reference allocation when the engineer's own console is at full
+// HP; scales down linearly as the engineer's HP drops. Returns 0 (and
+// leaves the accumulator alone) if the engineer isn't in repair mode.
+int engineering_console_consume_repair(EngineeringConsole *e,
+                                       float engineer_hp_share)
+{
+    if (!e->repairing) return 0;
+    if (engineer_hp_share < 0.0f) engineer_hp_share = 0.0f;
+    if (engineer_hp_share > 1.0f) engineer_hp_share = 1.0f;
+    // 5 HP/sec base → 5/60 per frame ≈ 0.083; with engineer at 100% HP
+    // and reference power, this delivers roughly one full repair tick
+    // every ~12 frames.
+    e->repair_acc += 5.0f * engineer_hp_share / 60.0f;
+    int whole = 0;
+    if (e->repair_acc >= 1.0f) {
+        whole = (int)e->repair_acc;
+        e->repair_acc -= (float)whole;
+    }
+    return whole;
 }
 
 void engineering_console_draw(EngineeringConsole *e)
