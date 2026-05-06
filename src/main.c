@@ -266,6 +266,8 @@ int main(void)
 
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE);
     rdpq_init();
+    rdpq_debug_start();
+    rdpq_debug_log(true);
     t3d_init((T3DInitParams){});
 
     rdpq_font_t *font = rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO);
