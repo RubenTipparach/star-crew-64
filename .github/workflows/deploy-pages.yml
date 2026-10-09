@@ -96,7 +96,11 @@ jobs:
       - name: Setup emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          # Pinned: Emscripten 6.x's emdawnwebgpu port refuses a link through
+          # emcc ("emdawnwebgpu requires C++. Link using em++"), and the
+          # rubens-ares web-ui makefile links with emcc. 5.0.7 was the latest
+          # release when main last built green (2026-05-06).
+          version: 5.0.7
           actions-cache-folder: emsdk-cache
 
       - name: Verify emscripten
