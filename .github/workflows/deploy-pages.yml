@@ -58,8 +58,15 @@ jobs:
               make -C /tmp/libdragon tools -j"$(nproc)"
               make -C /tmp/libdragon tools-install
             fi
+            # Pin tiny3d too, to the last commit that builds against the
+            # libdragon above. tiny3d 1029791 ("Anim opt", 2026-10-06) moved
+            # t3danim.c to libdragon's newer DMA API (a dma_read_raw_async
+            # that returns a ticket, dma_wait_finished), which 25165e1 does
+            # not have. 9bfdf79 was tiny3d's head when main last built green.
+            TINY3D_SHA=9bfdf795a46fc52459226e3932cc3fc69bceaa6c
             if [ ! -d tiny3d ]; then
-              git clone --depth 1 https://github.com/HailToDodongo/tiny3d.git
+              git clone https://github.com/HailToDodongo/tiny3d.git
+              git -C tiny3d checkout "$TINY3D_SHA"
             fi
             # Only build the core library (produces tiny3d/build/libt3d.a);
             # tiny3d's build.sh also rebuilds every example + tool, which we
@@ -89,7 +96,11 @@ jobs:
       - name: Setup emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          # Pinned: Emscripten 6.x's emdawnwebgpu port refuses a link through
+          # emcc ("emdawnwebgpu requires C++. Link using em++"), and the
+          # rubens-ares web-ui makefile links with emcc. 5.0.7 was the latest
+          # release when main last built green (2026-05-06).
+          version: 5.0.7
           actions-cache-folder: emsdk-cache
 
       - name: Verify emscripten

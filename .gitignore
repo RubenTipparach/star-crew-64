@@ -38,8 +38,9 @@ _site/
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
+# Claude Code: local settings stay out; skills are shared and committed
+.claude/*
+!.claude/skills/
 *.n64
 *.eeprom
 *.ram
